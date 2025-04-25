@@ -1,15 +1,32 @@
 package main
 
-import "lab4/src/greatvaluekafka"
+import (
+	"lab4/src/greatvaluekafka"
+	"log"
+	"net/rpc"
+	"time"
+)
 
+// this is a test driver just to see if the controller works
 func main() {
 	bOpts := &greatvaluekafka.BrokerOpts{
 		BrokerIndex: 0,
-		BrokerAddr:  "localhost:6969",
+		BrokerAddr:  "localhost:9696",
+		ControlAddr: "localhost:6969",
 	}
 
-	broker := greatvaluekafka.NewBroker(bOpts)
-	broker.Activate()
+	go greatvaluekafka.NewBroker(bOpts)
+
+	client, err := rpc.DialHTTP("tcp", bOpts.ControlAddr)
+	if err != nil {
+		log.Fatal("dialing:", err)
+	}
+
+	client.Call("BrokerRPC.Activate", struct{}{}, nil)
+
+	time.Sleep(20 * time.Second)
+
+	client.Call("BrokerRPC.Deactivate", struct{}{}, nil)
 
 	select {}
 }

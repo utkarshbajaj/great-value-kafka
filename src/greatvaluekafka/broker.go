@@ -3,7 +3,9 @@ package greatvaluekafka
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/rpc"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -24,10 +26,10 @@ type BrokerStatusReport struct {
 }
 
 type BrokerControlInterface struct {
-	Activate   func() RemoteError
-	Deactivate func() RemoteError
-	Terminate  func() RemoteError
-	GetStatus  func() (BrokerStatusReport, RemoteError)
+	Activate   func() error
+	Deactivate func() error
+	Terminate  func() error
+	GetStatus  func() (BrokerStatusReport, error)
 }
 
 // an instance of a kafka broker.
@@ -36,8 +38,9 @@ type Broker struct {
 	// the broker's participant index
 	brokerIndex int
 
-	httpServer   *http.Server
-	shouldListen bool
+	httpServer     *http.Server
+	shouldListen   bool
+	controllerStub *rpc.Server
 
 	// the broker's topics
 	Topics sync.Map
@@ -45,15 +48,34 @@ type Broker struct {
 
 type BrokerOpts struct {
 	BrokerIndex int
-	BrokerAddr  string
+
+	// the address that pub/sub clients connect to
+	BrokerAddr string
+
+	// the address that listens to the controller
+	ControlAddr string
 }
 
 // NewBroker creates a new broker
 func NewBroker(bOpts *BrokerOpts) *Broker {
 	b := &Broker{
-		brokerIndex: bOpts.BrokerIndex,
-		Topics:      sync.Map{},
+		brokerIndex:    bOpts.BrokerIndex,
+		Topics:         sync.Map{},
+		controllerStub: rpc.NewServer(),
 	}
+
+	brokerRPC := &BrokerRPC{
+		Broker: b,
+	}
+
+	b.controllerStub.Register(brokerRPC)
+	b.controllerStub.HandleHTTP(rpc.DefaultRPCPath, rpc.DefaultDebugPath)
+
+	l, err := net.Listen("tcp", bOpts.ControlAddr)
+	if err != nil {
+		log.Fatal().Err(err).Msgf("Failed to listen on %s", bOpts.ControlAddr)
+	}
+	go http.Serve(l, nil)
 
 	// create multiplexer
 	mux := http.NewServeMux()
@@ -70,7 +92,8 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 }
 
 // Activate starts the broker server
-func (b *Broker) Activate() RemoteError {
+func (b *Broker) Activate() error {
+	log.Info().Msgf("Activating broker %v on %v", b.brokerIndex, b.httpServer.Addr)
 	// start the http server where the broker listens for publisher/subscriber requests
 	go func() {
 		if err := b.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -81,7 +104,29 @@ func (b *Broker) Activate() RemoteError {
 	b.shouldListen = true
 
 	// TODO: activate the Topic, aka it's raft groups per partition
-	return RemoteError{}
+	return nil
+}
+
+func (b *Broker) Deactivate() error {
+	log.Info().Msgf("Deactivating broker %v on %v", b.brokerIndex, b.httpServer.Addr)
+	b.shouldListen = false
+
+	// TODO: deactivate the Topic, aka it's raft groups per partition
+	return nil
+}
+
+func (b *Broker) Terminate() error {
+	b.shouldListen = false
+	b.httpServer.Close()
+
+	return nil
+}
+
+func (b *Broker) GetStatus() (BrokerStatusReport, error) {
+	return BrokerStatusReport{
+		Active:      b.shouldListen,
+		BrokerIndex: b.brokerIndex,
+	}, nil
 }
 
 // activeMiddleware serves as middleware for the http server; it is purely
