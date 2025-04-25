@@ -20,9 +20,13 @@ func NewTopic(name string, partitions int) *Topic {
 		Subscribers: make([]*Subscriber, 0),
 	}
 
+	pOpts := &partitionOpts{
+		maxSize: MAX_PARTITION_SIZE,
+	}
+
 	// create the partitions
 	for i := 0; i < partitions; i++ {
-		topic.Partitions[i] = NewPartition()
+		topic.Partitions[i] = NewPartition(pOpts)
 	}
 
 	return topic

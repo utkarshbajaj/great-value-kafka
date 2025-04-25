@@ -1,38 +1,15 @@
 package main
 
-import "fmt"
-import "greatvaluekafka/src/greatvaluekafka"
+import "lab4/src/greatvaluekafka"
 
 func main() {
-	// create a dummy subscriber
-	subscriber := &greatvaluekafka.Subscriber{
-		ReadIndex: 0,
+	bOpts := &greatvaluekafka.BrokerOpts{
+		BrokerIndex: 0,
+		BrokerAddr:  "localhost:6969",
 	}
 
-	// create a partition
-	partition := greatvaluekafka.NewPartition()
+	broker := greatvaluekafka.NewBroker(bOpts)
+	broker.Activate()
 
-	// create a partition item
-
-	for i := 0; i < 5; i++ {
-		// create a partition item
-
-		// create a big partition item using a for loop
-		var bigPartitionItem []byte
-		for j := 0; j < 512; j++ {
-			bigPartitionItem = append(bigPartitionItem, byte(i))
-		}
-
-		item := greatvaluekafka.NewPartitionItem(bigPartitionItem)
-
-		// enqueue the item
-		partition.Enqueue(item)
-	}
-
-	pi := partition.ReadBySub(subscriber)
-
-	fmt.Printf("Item: %v\n", pi.Message)
-
-	pi = partition.ReadBySub(subscriber)
-	fmt.Printf("Item: %v\n", pi.Message)
+	select {}
 }

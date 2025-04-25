@@ -1,7 +1,9 @@
 package greatvaluekafka
 
-import "time"
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // This is our queue message
 type PartitionItem struct {
@@ -32,14 +34,23 @@ type Partition struct {
 
 	// The logical start of the queue
 	head int
+
+	// the maximum size of the partition
+	partitionLimit int
+}
+
+type partitionOpts struct {
+	// the maximum size of the partition
+	maxSize int
 }
 
 // NewPartition creates a new partition
-func NewPartition() *Partition {
+func NewPartition(opts *partitionOpts) *Partition {
 	return &Partition{
 		queue: make([]*PartitionItem, 0),
 		size:  0,
 		head:  0,
+		partitionLimit: opts.maxSize,
 	}
 }
 
@@ -81,7 +92,7 @@ func (p *Partition) Enqueue(item *PartitionItem) {
 	p.size += item.size
 
 	// Check if the max queue size is reached
-	for p.size > MAX_PARTITION_SIZE {
+	for p.size > p.partitionLimit{
 		// Remove the oldest item from the queue
 		p.queue[0] = nil
 		p.queue = p.queue[1:]
