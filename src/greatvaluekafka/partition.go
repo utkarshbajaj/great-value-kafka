@@ -110,11 +110,6 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 		return nil
 	}
 
-	fmt.Printf("length of queue: %d\n", len(p.queue))
-	fmt.Printf("read index: %d\n", sub.ReadIndex)
-	fmt.Printf("real index: %d\n", realIndex)
-	fmt.Printf("head: %d\n", p.head)
-
 	item := p.queue[realIndex]
 
 	// update the read index of the subscriber

@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -46,6 +48,7 @@ type Broker struct {
 	Topics sync.Map
 }
 
+// BrokerOpts are the options for creating a new broker
 type BrokerOpts struct {
 	BrokerIndex int
 
@@ -64,6 +67,7 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 		controllerStub: rpc.NewServer(),
 	}
 
+	// Make sure this does not cause a deadlock
 	brokerRPC := &BrokerRPC{
 		Broker: b,
 	}
@@ -71,17 +75,19 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 	b.controllerStub.Register(brokerRPC)
 	b.controllerStub.HandleHTTP(rpc.DefaultRPCPath, rpc.DefaultDebugPath)
 
-	l, err := net.Listen("tcp", bOpts.ControlAddr)
+	listener, err := net.Listen("tcp", bOpts.ControlAddr)
 	if err != nil {
 		log.Fatal().Err(err).Msgf("Failed to listen on %s", bOpts.ControlAddr)
 	}
-	go http.Serve(l, nil)
+	go http.Serve(listener, nil)
 
 	// create multiplexer
 	mux := http.NewServeMux()
 
 	// Register handlers
 	mux.HandleFunc("/topics", b.handleTopicCreate)
+	mux.HandleFunc("/topics/{name}/subscribe", b.handleTopicSubscribe)
+	mux.HandleFunc("/subscribers/{id}/topics/{name}", b.handleReadTopic)
 
 	b.httpServer = &http.Server{
 		Addr:    bOpts.BrokerAddr,
@@ -172,4 +178,98 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 	b.Topics.Store(req.Name, &topic)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(topic.Name))
+}
+
+// handleTopicSubscribe handles a topic subscription request
+func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// parse the topic name from the URL
+	topicName := r.URL.Path[len("/topics/") : len(r.URL.Path)-len("/subscribe")]
+
+	if topicName == "" {
+		http.Error(w, "Invalid topic name", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Received topic subscription request: %v", topicName)
+
+	// check if the topic exists
+	topic, ok := b.Topics.Load(topicName)
+	if !ok {
+		http.Error(w, "Topic not found", http.StatusNotFound)
+		return
+	}
+
+	// Typecase the topic to a *Topic
+	topicPtr := topic.(*Topic)
+
+	subscriberId := topicPtr.Subscribe(&Subscriber{
+		ReadIndex: 0,
+	})
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(strconv.Itoa(subscriberId)))
+}
+
+// handleReadTopic handles a read request for a topic
+func (b *Broker) handleReadTopic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// parse the topic name and the sub id from the URL
+	// the URL should be in the format /subscribers/{id}/topics/{name}
+
+	tokens := strings.Split(r.URL.Path, "/")
+
+	if len(tokens) != 5 {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
+	subscriberId, err := strconv.Atoi(tokens[2])
+	if err != nil {
+		http.Error(w, "Invalid subscriber id", http.StatusBadRequest)
+		return
+	}
+
+	topicName := tokens[4]
+	if topicName == "" {
+		http.Error(w, "Invalid topic name", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Received read request for topic %v and subscriber %v", topicName, subscriberId)
+
+	// check if the topic exists
+	topic, ok := b.Topics.Load(topicName)
+	if !ok {
+		http.Error(w, "Topic not found", http.StatusNotFound)
+		return
+	}
+
+	// Typecase the topic to a *Topic
+	topicPtr := topic.(*Topic)
+
+	// check if the subscriber exists
+	if subscriberId >= len(topicPtr.Subscribers) {
+		http.Error(w, "Subscriber not found", http.StatusNotFound)
+		return
+	}
+
+	subscriber := topicPtr.Subscribers[subscriberId]
+
+	// read the topic for the subscriber
+	items := topicPtr.ReadBySub(subscriber)
+
+	// return the items as a json array
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(items)
 }
