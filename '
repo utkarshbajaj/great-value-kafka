@@ -214,7 +214,9 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	// Typecase the topic to a *Topic
 	topicPtr := topic.(*Topic)
 
-	subscriberId := topicPtr.Subscribe()
+	subscriberId := topicPtr.Subscribe(&Subscriber{
+		ReadIndex: 0,
+	})
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(subscriberId.String()))
@@ -319,5 +321,4 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 	// Mainly doing this to avoid blocking the http request
 	go topicPtr.PushToPartition([]byte(req.Message), req.Key)
 
-	w.WriteHeader(http.StatusAccepted)
 }

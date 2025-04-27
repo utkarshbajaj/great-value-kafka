@@ -1,7 +1,7 @@
 package greatvaluekafka
 
 import (
-	"fmt"
+	"github.com/rs/zerolog/log"
 	"time"
 )
 
@@ -27,6 +27,10 @@ func NewPartitionItem(message []byte) *PartitionItem {
 
 // Patrition is the actual message queue
 type Partition struct {
+	// the partition id
+	Id int
+
+	// the partition message queue
 	queue []*PartitionItem
 
 	// metadata per partition
@@ -41,12 +45,14 @@ type Partition struct {
 
 type partitionOpts struct {
 	// the maximum size of the partition
-	maxSize int
+	maxSize     int
+	PartitionId int
 }
 
 // NewPartition creates a new partition
 func NewPartition(opts *partitionOpts) *Partition {
 	return &Partition{
+		Id:             opts.PartitionId,
 		queue:          make([]*PartitionItem, 0),
 		size:           0,
 		head:           0,
@@ -61,15 +67,15 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 	}
 
 	// find out the minimum index all subscribers are at
-	minIndex := subs[0].ReadIndex
+	minIndex := subs[0].ReadIndex[p.Id]
 	for i := 1; i < len(subs); i++ {
-		if subs[i].ReadIndex < minIndex {
-			minIndex = subs[i].ReadIndex
+		if subs[i].ReadIndex[p.Id] < minIndex {
+			minIndex = subs[i].ReadIndex[p.Id]
 		}
 	}
 
 	// remove until the minimum index
-	for i := 0; i < minIndex; i++ {
+	for range minIndex {
 		// remove the first item from the queue
 		item := p.queue[0]
 
@@ -85,6 +91,8 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 }
 
 func (p *Partition) Enqueue(item *PartitionItem) {
+	log.Printf("Enqueueing item: %v", item.Message)
+
 	// add item to the queue
 	p.queue = append(p.queue, item)
 
@@ -102,9 +110,8 @@ func (p *Partition) Enqueue(item *PartitionItem) {
 }
 
 func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
-	realIndex := sub.ReadIndex - p.head
-
-	realIndex = max(realIndex, 0)
+	realIndex := max(sub.ReadIndex[p.Id]-p.head, 0)
+	log.Printf("Reading item at index: %v", realIndex)
 
 	if realIndex >= len(p.queue) {
 		return nil
@@ -114,7 +121,9 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 
 	// update the read index of the subscriber
 	// TODO: Does this cover all the edge cases?
-	sub.ReadIndex = p.head + realIndex + 1
+	sub.ReadIndex[p.Id] = p.head + realIndex + 1
+
+	log.Printf("Read index for subscriber %v is now %v", sub.Id, sub.ReadIndex[p.Id])
 
 	return item
 }

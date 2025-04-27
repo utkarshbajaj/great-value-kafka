@@ -4,7 +4,6 @@ import (
 	"lab4/src/greatvaluekafka"
 	"log"
 	"net/rpc"
-	"time"
 )
 
 // this is a test driver just to see if the controller works
@@ -23,10 +22,6 @@ func main() {
 	}
 
 	client.Call("BrokerRPC.Activate", struct{}{}, nil)
-
-	time.Sleep(20 * time.Second)
-
-	client.Call("BrokerRPC.Deactivate", struct{}{}, nil)
 
 	select {}
 }
