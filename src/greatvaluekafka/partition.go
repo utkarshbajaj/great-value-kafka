@@ -1,8 +1,9 @@
 package greatvaluekafka
 
 import (
-	"github.com/rs/zerolog/log"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // This is our queue message
@@ -34,7 +35,7 @@ type Partition struct {
 	queue []*PartitionItem
 
 	// metadata per partition
-	size int
+	Size int
 
 	// The logical start of the queue
 	head int
@@ -54,12 +55,16 @@ func NewPartition(opts *partitionOpts) *Partition {
 	return &Partition{
 		Id:             opts.PartitionId,
 		queue:          make([]*PartitionItem, 0),
-		size:           0,
+		Size:           0,
 		head:           0,
 		partitionLimit: opts.maxSize,
 	}
 }
 
+// Dequeue only removes from the partition items that have been all read
+// by the subscribers. The minIndex is found by checking which subscriber
+// has the lowest progress on reading the queue, since their next read
+// index should not be removed, but those before it should be.
 func (p *Partition) Dequeue(subs []*Subscriber) {
 	// check if the queue is empty
 	if len(p.queue) == 0 {
@@ -83,13 +88,16 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 		p.queue[0] = nil
 
 		p.queue = p.queue[1:]
-		p.size -= item.size
+		p.Size -= item.size
 	}
 
 	// update the head of the queue
 	p.head = minIndex
 }
 
+// Enqueue will add the given item to the partition queue, and update the size
+// of the partition. If this size exceeds the partition limit, the oldest items
+// will be removed from the queue decreasing the size until its below the limit.
 func (p *Partition) Enqueue(item *PartitionItem) {
 	log.Printf("Enqueueing item: %v", item.Message)
 
@@ -97,18 +105,22 @@ func (p *Partition) Enqueue(item *PartitionItem) {
 	p.queue = append(p.queue, item)
 
 	// update the size of the partition
-	p.size += item.size
+	p.Size += item.size
 
 	// Check if the max queue size is reached
-	for p.size > p.partitionLimit {
+	for p.Size > p.partitionLimit {
 		// Remove the oldest item from the queue
+		itemSize := p.queue[0].size
 		p.queue[0] = nil
 		p.queue = p.queue[1:]
-		p.size -= item.size
+		p.Size -= itemSize
 		p.head++
 	}
 }
 
+// ReadBySub will read as much of the next item as possible from the partition
+// queue, starting from the given subscriber's read index. It will return the
+// next item, or nil if there are no more items to read for this subscriber.
 func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 	realIndex := max(sub.ReadIndex[p.Id]-p.head, 0)
 	log.Printf("Reading item at index: %v", realIndex)
