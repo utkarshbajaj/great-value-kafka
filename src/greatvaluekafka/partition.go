@@ -1,6 +1,7 @@
 package greatvaluekafka
 
 import (
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -42,6 +43,9 @@ type Partition struct {
 
 	// the maximum size of the partition
 	partitionLimit int
+
+	// lock for the queue so that concurrent reads/writes are safe
+	partitionLock sync.RWMutex
 }
 
 type partitionOpts struct {
@@ -66,21 +70,31 @@ func NewPartition(opts *partitionOpts) *Partition {
 // has the lowest progress on reading the queue, since their next read
 // index should not be removed, but those before it should be.
 func (p *Partition) Dequeue(subs []*Subscriber) {
+	p.partitionLock.Lock()
+	defer p.partitionLock.Unlock()
 	// check if the queue is empty
 	if len(p.queue) == 0 {
 		return
 	}
 
 	// find out the minimum index all subscribers are at
+	subs[0].subMtx.RLock()
 	minIndex := subs[0].ReadIndex[p.Id]
+	subs[0].subMtx.RUnlock()
+
 	for i := 1; i < len(subs); i++ {
-		if subs[i].ReadIndex[p.Id] < minIndex {
-			minIndex = subs[i].ReadIndex[p.Id]
+		subs[i].subMtx.RLock()
+		index := subs[i].ReadIndex[p.Id]
+		subs[i].subMtx.RUnlock()
+		
+		if index < minIndex {
+			minIndex = index
 		}
 	}
 
 	// remove until the minimum index
 	for range minIndex {
+
 		// remove the first item from the queue
 		item := p.queue[0]
 
@@ -99,6 +113,8 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 // of the partition. If this size exceeds the partition limit, the oldest items
 // will be removed from the queue decreasing the size until its below the limit.
 func (p *Partition) Enqueue(item *PartitionItem) {
+	p.partitionLock.Lock()
+	defer p.partitionLock.Unlock()
 	log.Printf("Enqueueing item: %v", item.Message)
 
 	// add item to the queue
@@ -122,6 +138,11 @@ func (p *Partition) Enqueue(item *PartitionItem) {
 // queue, starting from the given subscriber's read index. It will return the
 // next item, or nil if there are no more items to read for this subscriber.
 func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
+	p.partitionLock.RLock()
+	sub.subMtx.Lock()
+	defer sub.subMtx.Unlock()
+	defer p.partitionLock.RUnlock()
+
 	realIndex := max(sub.ReadIndex[p.Id]-p.head, 0)
 	log.Printf("Reading item at index: %v", realIndex)
 

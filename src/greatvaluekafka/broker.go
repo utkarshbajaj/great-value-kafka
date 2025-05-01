@@ -188,7 +188,6 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 
 // handleTopicSubscribe handles a topic subscription request
 func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
@@ -229,7 +228,6 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 
 	// parse the topic name and the sub id from the URL
 	// the URL should be in the format /subscribers/{id}/topics/{name}
-
 	tokens := strings.Split(r.URL.Path, "/")
 
 	if len(tokens) != 5 {

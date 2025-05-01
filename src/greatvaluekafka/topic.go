@@ -45,7 +45,7 @@ func NewTopic(name string, partitions int) *Topic {
 // Subscribe adds a subscriber to the topic
 func (t *Topic) Subscribe() uuid.UUID {
 	// add the subscriber to the topic
-	subscriber := NewSubscriber()
+	subscriber := NewSubscriber(NUM_PARTITIONS)
 	t.Subscribers.Store(subscriber.Id, subscriber)
 
 	return subscriber.Id

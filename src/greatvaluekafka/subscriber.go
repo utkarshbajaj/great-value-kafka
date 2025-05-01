@@ -1,6 +1,10 @@
 package greatvaluekafka
 
-import "github.com/google/uuid"
+import (
+	"sync"
+
+	"github.com/google/uuid"
+)
 
 type Subscriber struct {
 	// the subscriber's id
@@ -8,11 +12,14 @@ type Subscriber struct {
 
 	// the index of the last read item per partition
 	ReadIndex []int
+
+	// read index lock
+	subMtx sync.RWMutex
 }
 
-func NewSubscriber() *Subscriber {
+func NewSubscriber(partitionCount int) *Subscriber {
 	return &Subscriber{
 		Id:        uuid.New(),
-		ReadIndex: make([]int, NUM_PARTITIONS),
+		ReadIndex: make([]int, partitionCount),
 	}
 }
