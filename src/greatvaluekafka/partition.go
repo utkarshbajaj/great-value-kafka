@@ -13,7 +13,7 @@ type PartitionItem struct {
 
 	// need to store metadata
 	createdAt time.Time
-	size      int
+	Size      int
 }
 
 // NewPartitionItem creates a new PartitionItem
@@ -22,7 +22,7 @@ func NewPartitionItem(message []byte) *PartitionItem {
 	return &PartitionItem{
 		Message:   message,
 		createdAt: time.Now(),
-		size:      len(message),
+		Size:      len(message),
 	}
 }
 
@@ -88,7 +88,7 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 		p.queue[0] = nil
 
 		p.queue = p.queue[1:]
-		p.Size -= item.size
+		p.Size -= item.Size
 	}
 
 	// update the head of the queue
@@ -105,15 +105,15 @@ func (p *Partition) Enqueue(item *PartitionItem) {
 	p.queue = append(p.queue, item)
 
 	// update the size of the partition
-	p.Size += item.size
+	p.Size += item.Size
 
 	// Check if the max queue size is reached
 	for p.Size > p.partitionLimit {
 		// Remove the oldest item from the queue
-		itemToRemoveSize := p.queue[0].size
+		itemToRemoveSize := p.queue[0].Size
 		p.queue[0] = nil
 		p.queue = p.queue[1:]
-		p.size -= itemToRemoveSize
+		p.Size -= itemToRemoveSize
 		p.head++
 	}
 }
