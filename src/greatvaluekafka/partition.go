@@ -102,9 +102,10 @@ func (p *Partition) Enqueue(item *PartitionItem) {
 	// Check if the max queue size is reached
 	for p.size > p.partitionLimit {
 		// Remove the oldest item from the queue
+		itemToRemoveSize := p.queue[0].size
 		p.queue[0] = nil
 		p.queue = p.queue[1:]
-		p.size -= item.size
+		p.size -= itemToRemoveSize
 		p.head++
 	}
 }
@@ -117,6 +118,7 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 		return nil
 	}
 
+	// TODO: We should have a read lock on the queue
 	item := p.queue[realIndex]
 
 	// update the read index of the subscriber
