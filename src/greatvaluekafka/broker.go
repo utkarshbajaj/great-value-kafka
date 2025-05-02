@@ -254,8 +254,6 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println("name of the treenode is " + t.Name)
-
 	// Typecase the topic to a *Topic
 	topicPtr := t.Topic
 

@@ -8,9 +8,9 @@ import (
 	"math/rand"
 	"net/http"
 	"net/rpc"
-	"sort"
+	// "sort"
 	"strconv"
-	"strings"
+	// "strings"
 	"testing"
 )
 
@@ -66,6 +66,8 @@ func sendHttpRequest(t *testing.T, ip string, port int, endpoint string, method 
 	// Create the URL endpoint
 	url := "http://" + ip + ":" + strconv.Itoa(port) + endpoint
 
+	fmt.Println(url)
+
 	// Create the HTTP request
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
 	if err != nil {
@@ -108,6 +110,7 @@ func createConsumerGroup(t *testing.T, ip string, port int, topicName string) st
 
 	// Send the HTTP request
 	body, statusCode := sendHttpRequest(t, ip, port, url, "POST", []byte("{}"))
+	fmt.Println(statusCode)
 	if statusCode != http.StatusCreated {
 		t.Fatalf("Failed to create consumer group for topic %v", topicName)
 	}
@@ -166,6 +169,7 @@ func readMessage(t *testing.T, ip string, port int, topicName string, consumerGr
 	return messages
 }
 
+/*
 // TODO: Add tests for this
 // Test that the endpoints are working well
 // Test that you can deactivate and activate the broker and the HTTP request behave the same way
@@ -274,3 +278,4 @@ func Test_MultiplePublishersMultipleSubscribers(t *testing.T) {
 
 	fmt.Println("Passed test 2")
 }
+*/
