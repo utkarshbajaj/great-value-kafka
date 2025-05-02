@@ -55,7 +55,8 @@ type Broker struct {
 	maxPartitionSize int
 
 	// TODO: have this be able to be set by clients via API
-	ttlMs int
+	ttlMs         int
+	sweepInterval int
 
 	// the http listener for the rpc server
 	rpcListener net.Listener
@@ -76,6 +77,9 @@ type BrokerOpts struct {
 
 	// time to live for messages in milliseconds
 	TTLMs int
+
+	// sweep interval for messages in seconds
+	SweepInterval int
 
 	// the address that pub/sub clients connect to
 	BrokerAddr string
@@ -99,6 +103,7 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 		numPartitions:    bOpts.NumPartitions,
 		maxPartitionSize: bOpts.MaxPartitionSize,
 		ttlMs:            bOpts.TTLMs,
+		sweepInterval:    bOpts.SweepInterval,
 	}
 
 	// Make sure this does not cause a deadlock
@@ -221,6 +226,8 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 		Name:             req.Name,
 		Partitions:       b.numPartitions,
 		MaxPartitionSize: b.maxPartitionSize,
+		TTLMs:            b.ttlMs,
+		SweepInterval:    b.sweepInterval,
 	}
 	topic := NewTopic(topicOpts)
 	b.Topics.Store(req.Name, topic)

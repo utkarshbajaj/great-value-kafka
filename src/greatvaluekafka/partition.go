@@ -81,7 +81,8 @@ func NewPartition(opts *partitionOpts) *Partition {
 	}
 
 	// Start with empty subscribers list, it will be updated when subscribers are added
-	// p.StartDequeueCron(p.sweepInterval)
+	log.Printf("Starting dequeue cron for partition %v with interval %v", p.Id, time.Duration(p.sweepInterval)*time.Second)
+	p.StartDequeueCron(p.sweepInterval)
 
 	return p
 }
@@ -196,9 +197,9 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 }
 
 // StartDequeueCron starts a goroutine that runs Dequeue every 5 seconds
-func (p *Partition) StartDequeueCron(everyMs int) {
+func (p *Partition) StartDequeueCron(seconds int) {
 	p.stopSweepChan = make(chan struct{})
-	ticker := time.NewTicker(time.Duration(everyMs) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
 
 	go func() {
 		for {

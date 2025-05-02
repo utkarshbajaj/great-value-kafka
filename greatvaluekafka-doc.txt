@@ -1,0 +1,272 @@
+package greatvaluekafka // import "lab4/src/greatvaluekafka"
+
+
+CONSTANTS
+
+const (
+	MAX_POLL_RECORDS = 100
+)
+
+FUNCTIONS
+
+func HashToInt(s string) int
+func IsExpired(ttlMs int, timestamp int64) bool
+
+TYPES
+
+type Broker struct {
+	// the broker's participant index
+	brokerIndex int
+
+	httpServer     *http.Server
+	shouldListen   bool
+	controllerStub *rpc.Server
+
+	// number of partitions per Topics
+	numPartitions    int
+	maxPartitionSize int
+
+	// TODO: have this be able to be set by clients via API
+	ttlMs int
+
+	// the http listener for the rpc server
+	rpcListener net.Listener
+
+	// the broker's topics
+	Topics sync.Map
+}
+    an instance of a kafka broker. each broker can have multiple topics.
+
+func NewBroker(bOpts *BrokerOpts) *Broker
+    NewBroker creates a new broker
+
+func (b *Broker) Activate() error
+    Activate starts the broker server
+
+func (b *Broker) Deactivate() error
+
+func (b *Broker) GetStatus() (BrokerStatusReport, error)
+
+func (b *Broker) Terminate() error
+
+func (b *Broker) activeMiddleware(next http.Handler) http.Handler
+    activeMiddleware serves as middleware for the http server; it is purely so
+    that we dont have to actually shut down the server. we "pause" it.
+
+func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Request)
+    handleConsumerGroupSubscribe handles a consumer group subscription request
+
+func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request)
+    handleTopicConsume handles a read request for a topic
+
+func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request)
+    handleTopicCreate handles a topic creation request, if the topic exists
+    already then it will soft fail (nothing happens)
+
+func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request)
+    handleTopicPublish handles a publish request for a topic
+
+func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request)
+    handleTopicSubscribe creates a new consumer group for the topic, then
+    returns the consumer group id
+
+type BrokerControlInterface struct {
+	Activate   func() error
+	Deactivate func() error
+	Terminate  func() error
+	GetStatus  func() (BrokerStatusReport, error)
+}
+
+type BrokerOpts struct {
+	BrokerIndex int
+
+	// number of partitions per Topics
+	NumPartitions int
+
+	// max size in bytes for a partition
+	MaxPartitionSize int
+
+	// time to live for messages in milliseconds
+	TTLMs int
+
+	// the address that pub/sub clients connect to
+	BrokerAddr string
+
+	// the address that listens to the controller
+	ControlAddr string
+
+	// rpc path
+	RPCPath string
+
+	// debug path
+	DebugPath string
+}
+    BrokerOpts are the options for creating a new broker
+
+type BrokerRPC struct {
+	Broker *Broker
+}
+
+func (b *BrokerRPC) Activate(_ struct{}, _ *struct{}) error
+
+func (b *BrokerRPC) Deactivate(_ struct{}, _ *struct{}) error
+
+func (b *BrokerRPC) GetStatus(_ struct{}, reply *BrokerStatusReport) error
+
+func (b *BrokerRPC) Terminate(_ struct{}, _ *struct{}) error
+
+type BrokerStatusReport struct {
+	Active      bool
+	BrokerIndex int
+}
+
+type ConsumerGroup struct {
+	// the consumer group id
+	Id string
+
+	// the consumer group subscribers
+	Subscribers *[]*Subscriber
+
+	// map from uuid to the index in array above
+	SubscriberIndex map[uuid.UUID]int
+}
+
+func NewConsumerGroup(id string) *ConsumerGroup
+
+type Partition struct {
+	// the partition id
+	Id int
+
+	// the partition message queue
+	queue []*PartitionItem
+
+	// metadata per partition
+	Size int
+
+	// The logical start of the queue
+	head int
+
+	// the maximum size of the partition
+	partitionLimit int
+
+	// the time to live for messages in milliseconds
+	ttlMs int
+
+	// lock for the queue so that concurrent reads/writes are safe
+	partitionLock sync.RWMutex
+
+	// channel to control dequeue sweep goroutine
+	stopSweepChan chan struct{}
+	sweepInterval int
+
+	// keep a pointer to the subscribers slice
+	subscribers *[]*Subscriber
+}
+    Patrition is the actual message queue
+
+func NewPartition(opts *partitionOpts) *Partition
+    NewPartition creates a new partition
+
+func (p *Partition) Dequeue(subs []*Subscriber)
+    Dequeue only removes from the partition items that have been all read by
+    the subscribers. The minIndex is found by checking which subscriber has the
+    lowest progress on reading the queue, since their next read index should not
+    be removed, but those before it should be.
+
+func (p *Partition) Enqueue(item *PartitionItem)
+    Enqueue will add the given item to the partition queue, and update the size
+    of the partition. If this size exceeds the partition limit, the oldest
+    items will be removed from the queue decreasing the size until its below the
+    limit.
+
+func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem
+    ReadBySub will read as much of the next item as possible from the partition
+    queue, starting from the given subscriber's read index. It will return the
+    next item, or nil if there are no more items to read for this subscriber.
+
+func (p *Partition) StartDequeueCron(everyMs int)
+    StartDequeueCron starts a goroutine that runs Dequeue every 5 seconds
+
+func (p *Partition) StopDequeueCron()
+    StopDequeueCron stops the dequeue goroutine
+
+type PartitionItem struct {
+	// need to store data
+	Message []byte
+
+	// need to store metadata
+	createdAt time.Time
+	Size      int
+}
+    This is our queue message
+
+func NewPartitionItem(message []byte) *PartitionItem
+    NewPartitionItem creates a new PartitionItem with the given message and sets
+    the createdAt time
+
+type Subscriber struct {
+	// the subscriber's id
+	Id uuid.UUID
+
+	// if the subscribers reads this partition or nor
+	ShouldReadPartition []bool
+
+	// the index of the last read item per partition
+	ReadIndex []int
+
+	// read index lock
+	subMtx sync.RWMutex
+}
+
+func NewSubscriber(partitionCount int) *Subscriber
+
+type Topic struct {
+	// topic name
+	Name string
+
+	// topic partitions
+	Partitions []*Partition
+
+	// topic consumer groups
+	ConsumerGroups sync.Map // map[string]*ConsumerGroup
+}
+
+func NewTopic(tOpts *TopicOpts) *Topic
+    NewTopic creates a new topic with the given name and partitions
+
+func (t *Topic) AddConsumerGroup(cgId string, consumerGroup *ConsumerGroup)
+
+func (t *Topic) PushToPartition(message []byte, key string)
+    PushToPartition pushes a message to a partition If the key is empty,
+    a random partition is selected Otherwise, the partition is selected based on
+    the key
+
+func (t *Topic) ReadBySub(sub *Subscriber) []string
+    ReadBySub reads a batch of messages from this topics
+
+type TopicCreateRequest struct {
+	// the topic name
+	Name string `json:"name"`
+}
+
+type TopicOpts struct {
+	Name             string
+	Partitions       int
+	MaxPartitionSize int
+	TTLMs            int
+}
+
+type TopicPublishRequest struct {
+	Key     string `json:"key"`
+	Message string `json:"message"`
+}
+
+type partitionOpts struct {
+	// the maximum size of the partition
+	maxSize       int
+	PartitionId   int
+	ttlMs         int
+	subscribers   *[]*Subscriber // keep a pointer to the subscribers slice
+	sweepInterval int
+}
+

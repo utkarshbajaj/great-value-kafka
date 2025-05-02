@@ -21,6 +21,7 @@ type TopicOpts struct {
 	Partitions       int
 	MaxPartitionSize int
 	TTLMs            int
+	SweepInterval    int
 }
 
 // NewTopic creates a new topic with the given name and partitions
@@ -40,7 +41,7 @@ func NewTopic(tOpts *TopicOpts) *Topic {
 			PartitionId:   i,
 			ttlMs:         tOpts.TTLMs,
 			subscribers:   &subscribers,
-			sweepInterval: 5000,
+			sweepInterval: tOpts.SweepInterval,
 		}
 		topic.Partitions[i] = NewPartition(pOpts)
 	}
@@ -56,6 +57,7 @@ func (t *Topic) AddConsumerGroup(cgId string, consumerGroup *ConsumerGroup) {
 	}
 }
 
+// ReadBySub reads a batch of messages from this topics
 func (t *Topic) ReadBySub(sub *Subscriber) []string {
 	// Loop through the partitions and dequeue the items
 	itemsFetched := 0
