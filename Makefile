@@ -1,5 +1,7 @@
 PKGNAME = greatvaluekafka
 
+all: docs build final 
+
 build:
 	go build -C src/$(PKGNAME)
 
