@@ -16,20 +16,32 @@ type Topic struct {
 	ConsumerGroups sync.Map // map[string]*ConsumerGroup
 }
 
+type TopicOpts struct {
+	Name             string
+	Partitions       int
+	MaxPartitionSize int
+	TTLMs            int
+	SweepInterval    int
+}
+
 // NewTopic creates a new topic with the given name and partitions
-func NewTopic(name string, partitions int) *Topic {
+func NewTopic(tOpts *TopicOpts) *Topic {
 	// create the topic
 	topic := &Topic{
-		Name:        name,
-		Partitions:  make([]*Partition, partitions),
+		Name:           tOpts.Name,
+		Partitions:     make([]*Partition, tOpts.Partitions),
 		ConsumerGroups: sync.Map{},
 	}
 
 	// create the partitions
-	for i := range partitions {
+	for i := range tOpts.Partitions {
+		subscribers := []*Subscriber{}
 		pOpts := &partitionOpts{
-			maxSize:     MAX_PARTITION_SIZE,
-			PartitionId: i,
+			maxSize:       tOpts.MaxPartitionSize,
+			PartitionId:   i,
+			ttlMs:         tOpts.TTLMs,
+			subscribers:   &subscribers,
+			sweepInterval: tOpts.SweepInterval,
 		}
 		topic.Partitions[i] = NewPartition(pOpts)
 	}
@@ -37,12 +49,16 @@ func NewTopic(name string, partitions int) *Topic {
 	return topic
 }
 
+func (t *Topic) AddConsumerGroup(cgId string, consumerGroup *ConsumerGroup) {
+	t.ConsumerGroups.Store(cgId, consumerGroup)
+	for _, partition := range t.Partitions {
+		// each partition should have a pointer to the consumer group subscribers
+		partition.subscribers = consumerGroup.Subscribers
+	}
+}
 
-// 1. How many return values per patrition? 10 for now
-// 2. How do we select the partition to take out the value from? Round robin
-
+// ReadBySub reads a batch of messages from this topics
 func (t *Topic) ReadBySub(sub *Subscriber) []string {
-	// log.Printf("Read request by subscriber: %v", sub.Id)
 	// Loop through the partitions and dequeue the items
 	itemsFetched := 0
 	batch := make([]string, 0)
@@ -54,7 +70,6 @@ func (t *Topic) ReadBySub(sub *Subscriber) []string {
 			if !sub.ShouldReadPartition[j] {
 				continue
 			}
-			// log.Printf("Reading partition %v", j)
 
 			// dequeue the items from the partition
 			item := t.Partitions[j].ReadBySub(sub)
@@ -66,7 +81,6 @@ func (t *Topic) ReadBySub(sub *Subscriber) []string {
 
 			batch = append(batch, string(item.Message))
 			itemsFetched++
-			// log.Printf("Found item: %v", string(item.Message))
 
 			if itemsFetched >= MAX_POLL_RECORDS {
 				break

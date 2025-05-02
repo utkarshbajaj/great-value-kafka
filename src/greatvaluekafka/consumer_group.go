@@ -7,7 +7,7 @@ type ConsumerGroup struct {
 	Id string
 
 	// the consumer group subscribers
-	Subscribers []*Subscriber
+	Subscribers *[]*Subscriber
 
 	// map from uuid to the index in array above
 	SubscriberIndex map[uuid.UUID]int
@@ -27,11 +27,12 @@ type ConsumerGroup struct {
 }
 
 func NewConsumerGroup(id string) *ConsumerGroup {
+	subscribers := []*Subscriber{}
 	return &ConsumerGroup{
 		Id:                       id,
 		SubscriberIndex:          make(map[uuid.UUID]int),
 		DependentSubscribers:     make(map[string][]string),
 		DependentSubscriberIndex: make(map[string]int),
+		Subscribers:              &subscribers,
 	}
 }
-

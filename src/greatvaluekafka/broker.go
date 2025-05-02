@@ -51,7 +51,12 @@ type Broker struct {
 	controllerStub *rpc.Server
 
 	// number of partitions per Topics
-	numPartitions int
+	numPartitions    int
+	maxPartitionSize int
+
+	// TODO: have this be able to be set by clients via API
+	ttlMs         int
+	sweepInterval int
 
 	// the http listener for the rpc server
 	rpcListener net.Listener
@@ -66,6 +71,15 @@ type BrokerOpts struct {
 
 	// number of partitions per Topics
 	NumPartitions int
+
+	// max size in bytes for a partition
+	MaxPartitionSize int
+
+	// time to live for messages in milliseconds
+	TTLMs int
+
+	// sweep interval for messages in seconds
+	SweepInterval int
 
 	// the address that pub/sub clients connect to
 	BrokerAddr string
@@ -83,13 +97,15 @@ type BrokerOpts struct {
 // NewBroker creates a new broker
 func NewBroker(bOpts *BrokerOpts) *Broker {
 	b := &Broker{
-		brokerIndex:    bOpts.BrokerIndex,
-		controllerStub: rpc.NewServer(),
-		numPartitions:  bOpts.NumPartitions,
-
 		// The root node is not linked to any topic, it's just a placeholder
 		// The children should be linked to topics
-		topicTreeRoot: NewTopicTreeNode("/"),
+		topicTreeRoot:    NewTopicTreeNode("/"),
+		brokerIndex:      bOpts.BrokerIndex,
+		controllerStub:   rpc.NewServer(),
+		numPartitions:    bOpts.NumPartitions,
+		maxPartitionSize: bOpts.MaxPartitionSize,
+		ttlMs:            bOpts.TTLMs,
+		sweepInterval:    bOpts.SweepInterval,
 	}
 
 	// Make sure this does not cause a deadlock
@@ -213,10 +229,21 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// create the topic
+	// topicOpts := &TopicOpts{
+	// 	Name:             req.Name,
+	// 	Partitions:       b.numPartitions,
+	// 	MaxPartitionSize: b.maxPartitionSize,
+	// 	TTLMs:            b.ttlMs,
+	// 	SweepInterval:    b.sweepInterval,
+	// }
+	// topic := NewTopic(topicOpts)
+
 	// Create the topic in the topic tree
 	b.topicTreeRoot.Create(tokens, 0)
-
 	log.Printf("Created topic %v", req.Name)
+
+	// b.Topics.Store(req.Name, topic)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(req.Name))
 }
@@ -257,8 +284,16 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	// Typecase the topic to a *Topic
 	topicPtr := t.Topic
 
+	topicOpts := &TopicOpts{
+		Name:             topicName,
+		Partitions:       b.numPartitions,
+		MaxPartitionSize: b.maxPartitionSize,
+		TTLMs:            b.ttlMs,
+		SweepInterval:    b.sweepInterval,
+	}
+
 	if topicPtr == nil {
-		topicPtr = NewTopic(topicName, b.numPartitions)
+		topicPtr = NewTopic(topicOpts)
 		t.Topic = topicPtr
 	}
 
@@ -268,7 +303,8 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	parentConsumerGroup = NewConsumerGroup(consumerGroupId.String())
 
 	// add the consumer group to the topic
-	topicPtr.ConsumerGroups.Store(consumerGroupId.String(), parentConsumerGroup)
+	// topicPtr.ConsumerGroups.Store(consumerGroupId.String(), parentConsumerGroup)
+	topicPtr.AddConsumerGroup(consumerGroupId.String(), parentConsumerGroup)
 
 	// now we need to add new consumer groups to all the leaf nodes from this node as well
 	// do we need to maintain a map of this somewhere?
@@ -276,9 +312,17 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 		consumerGroupId := uuid.New()
 		consumerGroupPtr := NewConsumerGroup(consumerGroupId.String())
 		if leafNode.Topic == nil {
-			leafNode.Topic = NewTopic(topicName, b.numPartitions)
+			topicOpts := &TopicOpts{
+				Name:             leafNode.Name,
+				Partitions:       b.numPartitions,
+				MaxPartitionSize: b.maxPartitionSize,
+				TTLMs:            b.ttlMs,
+				SweepInterval:    b.sweepInterval,
+			}
+			leafNode.Topic = NewTopic(topicOpts)
 		}
-		leafNode.Topic.ConsumerGroups.Store(consumerGroupId.String(), consumerGroupPtr)
+		// leafNode.Topic.ConsumerGroups.Store(consumerGroupId.String(), consumerGroupPtr)
+		leafNode.Topic.AddConsumerGroup(consumerGroupId.String(), consumerGroupPtr)
 
 		// add the consumer group to the parent consumer group as a dependent consumer group
 		parentConsumerGroup.DependentConsumerGroups = append(parentConsumerGroup.DependentConsumerGroups, consumerGroupPtr)
@@ -347,6 +391,10 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 
 	// get all the dependent subscribers for this subscriber
 	dependentSubscribers := parentConsumerGroupPtr.DependentSubscribers[subscriberId.String()]
+	log.Printf("Received topic consume request for subscriber %v", subscriberId)
+
+	// subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
+	// subscriberPtr := (*consumerGroupPtr.Subscribers)[subIndex]
 
 	items := make([]string, 0)
 	resultCh := make(chan []string, len(dependentSubscribers))
@@ -383,7 +431,8 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 
 func (b *Broker) readTopicForSubscriber(subscriberId uuid.UUID, consumerGroupPtr *ConsumerGroup, topicPtr *Topic) []string {
 	subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
-	subscriberPtr := consumerGroupPtr.Subscribers[subIndex]
+	ptrSubscriberPtr := consumerGroupPtr.Subscribers
+	subscriberPtr := (*ptrSubscriberPtr)[subIndex]
 
 	return topicPtr.ReadBySub(subscriberPtr)
 }
@@ -418,7 +467,14 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 	if topicPtr == nil {
 		// this is the first time we are publishing to this topic
 		// or a subscriber was never created for this topic
-		topicPtr = NewTopic(topicName, b.numPartitions)
+		topicOpts := &TopicOpts{
+			Name:             topicName,
+			Partitions:       b.numPartitions,
+			MaxPartitionSize: b.maxPartitionSize,
+			TTLMs:            b.ttlMs,
+			SweepInterval:    b.sweepInterval,
+		}
+		topicPtr = NewTopic(topicOpts)
 		t.Topic = topicPtr
 	}
 
@@ -432,7 +488,6 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 	// TODO: Check if there is a problem with usign a goroutine here
 	// Mainly doing this to avoid blocking the http request
 	go topicPtr.PushToPartition([]byte(req.Message), req.Key)
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -483,7 +538,7 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 	consumerGroupPtr := consumerGroup.(*ConsumerGroup)
 
 	// dont allow more subs than partitions
-	if len(consumerGroupPtr.Subscribers) >= b.numPartitions {
+	if len(*consumerGroupPtr.Subscribers) >= b.numPartitions {
 		http.Error(w, "Max subscribers reached "+strconv.Itoa(b.numPartitions), http.StatusBadRequest)
 		return
 	}
@@ -505,16 +560,16 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 func (b *Broker) addSubscriberToConsumerGroup(consumerGroupPtr *ConsumerGroup) string {
 
 	subscriber := NewSubscriber(b.numPartitions)
-	consumerGroupPtr.Subscribers = append(consumerGroupPtr.Subscribers, subscriber)
-	consumerGroupPtr.SubscriberIndex[subscriber.Id] = len(consumerGroupPtr.Subscribers) - 1
+	*consumerGroupPtr.Subscribers = append(*consumerGroupPtr.Subscribers, subscriber)
+	consumerGroupPtr.SubscriberIndex[subscriber.Id] = len(*consumerGroupPtr.Subscribers) - 1
 
 	// we will need to ensure that each subscriber is now remapped to new partitions
 	// we decide with partitions_per_sub = partitions/subscribers
-	numSubs := len(consumerGroupPtr.Subscribers)
+	numSubs := len(*consumerGroupPtr.Subscribers)
 	partitionsPerSub := b.numPartitions / numSubs
 
 	// reset mappings for each subscriber
-	for _, subscriber := range consumerGroupPtr.Subscribers {
+	for _, subscriber := range *consumerGroupPtr.Subscribers {
 		subscriber.ShouldReadPartition = make([]bool, b.numPartitions)
 	}
 
@@ -524,14 +579,14 @@ func (b *Broker) addSubscriberToConsumerGroup(consumerGroupPtr *ConsumerGroup) s
 	// remap the subscriber to the new partitions
 	currSub := 0
 	for i := range b.numPartitions {
-		consumerGroupPtr.Subscribers[currSub].ShouldReadPartition[i] = true
+		(*consumerGroupPtr.Subscribers)[currSub].ShouldReadPartition[i] = true
 		if (i+1)%partitionsPerSub == 0 {
 			currSub = (currSub + 1) % numSubs
 		}
 	}
 
 	// TODO: remove log; for each subscriber, should print which paritions they should read
-	for i, subscriber := range consumerGroupPtr.Subscribers {
+	for i, subscriber := range *consumerGroupPtr.Subscribers {
 		log.Printf("%v Subscriber %v should read partitions: %v", i, subscriber.Id, subscriber.ShouldReadPartition)
 	}
 

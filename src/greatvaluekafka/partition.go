@@ -44,25 +44,47 @@ type Partition struct {
 	// the maximum size of the partition
 	partitionLimit int
 
+	// the time to live for messages in milliseconds
+	ttlMs int
+
 	// lock for the queue so that concurrent reads/writes are safe
 	partitionLock sync.RWMutex
+
+	// channel to control dequeue sweep goroutine
+	stopSweepChan chan struct{}
+	sweepInterval int
+
+	// keep a pointer to the subscribers slice
+	subscribers *[]*Subscriber
 }
 
 type partitionOpts struct {
 	// the maximum size of the partition
-	maxSize     int
-	PartitionId int
+	maxSize       int
+	PartitionId   int
+	ttlMs         int
+	subscribers   *[]*Subscriber // keep a pointer to the subscribers slice
+	sweepInterval int
 }
 
 // NewPartition creates a new partition
 func NewPartition(opts *partitionOpts) *Partition {
-	return &Partition{
+	p := &Partition{
 		Id:             opts.PartitionId,
 		queue:          make([]*PartitionItem, 0),
 		Size:           0,
 		head:           0,
 		partitionLimit: opts.maxSize,
+		ttlMs:          opts.ttlMs,
+		subscribers:    opts.subscribers,
+		sweepInterval:  opts.sweepInterval,
 	}
+
+	// Start with empty subscribers list, it will be updated when subscribers are added
+	log.Printf("Starting dequeue cron for partition %v with interval %v", p.Id, time.Duration(p.sweepInterval)*time.Second)
+	p.StartDequeueCron(p.sweepInterval)
+
+	return p
 }
 
 // Dequeue only removes from the partition items that have been all read
@@ -72,6 +94,7 @@ func NewPartition(opts *partitionOpts) *Partition {
 func (p *Partition) Dequeue(subs []*Subscriber) {
 	p.partitionLock.Lock()
 	defer p.partitionLock.Unlock()
+
 	// check if the queue is empty
 	if len(p.queue) == 0 {
 		return
@@ -105,6 +128,17 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 		p.Size -= item.Size
 	}
 
+	// even if subs havent read, all expired messages should be removed
+	// while expired(queue[i]), move minIndex forward
+	for IsExpired(p.ttlMs, p.queue[minIndex].createdAt.UnixMilli()) {
+		minIndex++
+		if minIndex >= len(p.queue) {
+			break
+		}
+	}
+
+	p.queue = p.queue[minIndex:]
+
 	// update the head of the queue
 	p.head = minIndex
 }
@@ -115,7 +149,12 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 func (p *Partition) Enqueue(item *PartitionItem) {
 	p.partitionLock.Lock()
 	defer p.partitionLock.Unlock()
-	// log.Printf("Enqueueing item: %v", string(item.Message))
+
+	// skip adding when we dont have any subs
+	// TODO: subs is not concurrency safe
+	if len(*p.subscribers) == 0 {
+		return
+	}
 
 	// add item to the queue
 	p.queue = append(p.queue, item)
@@ -144,20 +183,39 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 	defer p.partitionLock.RUnlock()
 
 	realIndex := max(sub.ReadIndex[p.Id]-p.head, 0)
-	log.Printf("Reading item at index: %v", realIndex)
 
-	if realIndex >= len(p.queue) {
+	if realIndex >= len(p.queue) || len(p.queue) == 0 {
+		sub.ReadIndex[p.Id] = p.head
 		return nil
 	}
 
-	// TODO: We should have a read lock on the queue
 	item := p.queue[realIndex]
-
-	// update the read index of the subscriber
-	// TODO: Does this cover all the edge cases?
 	sub.ReadIndex[p.Id] = p.head + realIndex + 1
-
-	log.Printf("[Partition %v] Read index for subscriber %v is now %v", p.Id, sub.Id, sub.ReadIndex[p.Id])
-
 	return item
+}
+
+// StartDequeueCron starts a goroutine that runs Dequeue every 5 seconds
+func (p *Partition) StartDequeueCron(seconds int) {
+	p.stopSweepChan = make(chan struct{})
+	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				p.Dequeue(*p.subscribers)
+			case <-p.stopSweepChan:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+// StopDequeueCron stops the dequeue goroutine
+func (p *Partition) StopDequeueCron() {
+	if p.stopSweepChan != nil {
+		close(p.stopSweepChan)
+		p.stopSweepChan = nil
+	}
 }
