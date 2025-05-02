@@ -12,16 +12,27 @@ type ConsumerGroup struct {
 	// map from uuid to the index in array above
 	SubscriberIndex map[uuid.UUID]int
 
-	// are we handling the topics per consumer group?
-	// the consumer group topics
-	// Topics []*Topic
+	// if the consumer group has dependent consumer groups
+	DependentConsumerGroups []*ConsumerGroup
+
+	// if the consumer group has dependent topics
+	DependentTopics []*Topic
+
+	// the subscribers a subscriber is parent to in this consumer group
+	DependentSubscribers map[string][]string
+
+	// map from the subscriber id to the index in the array above
+	// this is used to find the consumer group index for a subscriber
+	DependentSubscriberIndex map[string]int
 }
 
 func NewConsumerGroup(id string) *ConsumerGroup {
 	subscribers := []*Subscriber{}
 	return &ConsumerGroup{
-		Id:              id,
-		Subscribers:     &subscribers,
-		SubscriberIndex: make(map[uuid.UUID]int),
+		Id:                       id,
+		SubscriberIndex:          make(map[uuid.UUID]int),
+		DependentSubscribers:     make(map[string][]string),
+		DependentSubscriberIndex: make(map[string]int),
+		Subscribers:              &subscribers,
 	}
 }

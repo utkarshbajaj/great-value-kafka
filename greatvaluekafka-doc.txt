@@ -27,13 +27,14 @@ type Broker struct {
 	maxPartitionSize int
 
 	// TODO: have this be able to be set by clients via API
-	ttlMs int
+	ttlMs         int
+	sweepInterval int
 
 	// the http listener for the rpc server
 	rpcListener net.Listener
 
-	// the broker's topics
-	Topics sync.Map
+	// the topic tree
+	topicTreeRoot *TopicTreeNode
 }
     an instance of a kafka broker. each broker can have multiple topics.
 
@@ -53,6 +54,8 @@ func (b *Broker) activeMiddleware(next http.Handler) http.Handler
     activeMiddleware serves as middleware for the http server; it is purely so
     that we dont have to actually shut down the server. we "pause" it.
 
+func (b *Broker) addSubscriberToConsumerGroup(consumerGroupPtr *ConsumerGroup) string
+
 func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Request)
     handleConsumerGroupSubscribe handles a consumer group subscription request
 
@@ -69,6 +72,8 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request)
 func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request)
     handleTopicSubscribe creates a new consumer group for the topic, then
     returns the consumer group id
+
+func (b *Broker) readTopicForSubscriber(subscriberId uuid.UUID, consumerGroupPtr *ConsumerGroup, topicPtr *Topic) []string
 
 type BrokerControlInterface struct {
 	Activate   func() error
@@ -88,6 +93,9 @@ type BrokerOpts struct {
 
 	// time to live for messages in milliseconds
 	TTLMs int
+
+	// sweep interval for messages in seconds
+	SweepInterval int
 
 	// the address that pub/sub clients connect to
 	BrokerAddr string
@@ -129,6 +137,19 @@ type ConsumerGroup struct {
 
 	// map from uuid to the index in array above
 	SubscriberIndex map[uuid.UUID]int
+
+	// if the consumer group has dependent consumer groups
+	DependentConsumerGroups []*ConsumerGroup
+
+	// if the consumer group has dependent topics
+	DependentTopics []*Topic
+
+	// the subscribers a subscriber is parent to in this consumer group
+	DependentSubscribers map[string][]string
+
+	// map from the subscriber id to the index in the array above
+	// this is used to find the consumer group index for a subscriber
+	DependentSubscriberIndex map[string]int
 }
 
 func NewConsumerGroup(id string) *ConsumerGroup
@@ -184,7 +205,7 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem
     queue, starting from the given subscriber's read index. It will return the
     next item, or nil if there are no more items to read for this subscriber.
 
-func (p *Partition) StartDequeueCron(everyMs int)
+func (p *Partition) StartDequeueCron(seconds int)
     StartDequeueCron starts a goroutine that runs Dequeue every 5 seconds
 
 func (p *Partition) StopDequeueCron()
@@ -254,12 +275,39 @@ type TopicOpts struct {
 	Partitions       int
 	MaxPartitionSize int
 	TTLMs            int
+	SweepInterval    int
 }
 
 type TopicPublishRequest struct {
 	Key     string `json:"key"`
 	Message string `json:"message"`
 }
+
+type TopicTreeNode struct {
+	// the topic name
+	Name string
+
+	// the reference to the TopicTreeNode
+	Topic *Topic
+
+	// the children node for the topic
+	Children []*TopicTreeNode
+}
+
+func NewTopicTreeNode(name string) *TopicTreeNode
+    NewTopicTreeNode creates a new topic tree node
+
+func (t *TopicTreeNode) AddChild(child *TopicTreeNode)
+
+func (t *TopicTreeNode) Create(names []string, index int) *TopicTreeNode
+    Create a new topic tree node based on the path provided
+
+func (t *TopicTreeNode) GetLeafNodes() []*TopicTreeNode
+    GetLeafNodes returns all the leaf nodes in the subtree rooted at this node.
+
+func (t *TopicTreeNode) Search(names []string, index int) *TopicTreeNode
+    search for a topic in the tree if the topic is found, return the node if the
+    topic is not found, return nil TODO: Confirm this logic
 
 type partitionOpts struct {
 	// the maximum size of the partition

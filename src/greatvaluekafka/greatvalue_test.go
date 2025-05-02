@@ -81,6 +81,8 @@ func sendHttpRequest(t *testing.T, ip string, port int, endpoint string, method 
 	// Create the URL endpoint
 	url := "http://" + ip + ":" + strconv.Itoa(port) + endpoint
 
+	fmt.Println(url)
+
 	// Create the HTTP request
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
 	if err != nil {
@@ -123,6 +125,7 @@ func createConsumerGroup(t *testing.T, ip string, port int, topicName string) st
 
 	// Send the HTTP request
 	body, statusCode := sendHttpRequest(t, ip, port, url, "POST", []byte("{}"))
+	fmt.Println(statusCode)
 	if statusCode != http.StatusCreated {
 		t.Fatalf("Failed to create consumer group for topic %v", topicName)
 	}
@@ -185,15 +188,15 @@ func readMessage(t *testing.T, ip string, port int, topicName string, consumerGr
 // TODO: Add tests for this
 // Test that the endpoints are working well
 // Test that you can deactivate and activate the broker and the HTTP request behave the same way
-// func TestFinalSetup(t *testing.T) {
-// 	broker := NewBroker(&BrokerOpts{
-// 		BrokerIndex: 0,
-// 		BrokerAddr:  "127.0.0.1:9092",
-// 		ControlAddr: "127.0.0.1:9093",
-// 	})
-// 	go broker.Activate()
-//  fmt.Println("Passed test 0")
-// }
+func TestFinalSetup(t *testing.T) {
+	broker := NewBroker(&BrokerOpts{
+		BrokerIndex: 0,
+		BrokerAddr:  "127.0.0.1:9092",
+		ControlAddr: "127.0.0.1:9093",
+	})
+	go broker.Activate()
+ fmt.Println("Passed test 0")
+}
 
 // TestFinalSinglePublishSingleSubscribe tests a single publish and single subscribe
 // with one partition. This should work for multiple messages.
@@ -892,6 +895,190 @@ func TestFinal_BrokerLoadBalancing(t *testing.T) {
 	// t.Errorf("Test 6 Not implemented")
 }
 
-func TestFinal_OverlappingTopicsAndHierachicalReads(t *testing.T) {
-	// t.Errorf("Test 7 Not implemented")
+// startPublisher creates a goroutine that publishes messages with the given parameters
+func startPublisher2(t *testing.T, ip string, port int, topicName string, numMessages int, base string) {
+	go func() {
+		for i := 0; i < numMessages; i++ {
+			publishMessage(t, ip, port, topicName, "", base+"-"+strconv.Itoa(i))
+			time.Sleep(69 * time.Millisecond)
+		}
+	}()
 }
+
+func TestFinal_HierarchicalTopicTree(t *testing.T) {
+	// Create a new broker controller
+	brokerOpts := &newBrokerControllerOpts{
+		groupSize:        1,
+		numPartitions:    5,
+		maxPartitionSize: 1000,
+		TTLMs:            99999,
+		SweepInterval:    99,
+	}
+	brokerCtrl := newBrokerController(t, brokerOpts)
+
+	tokens := strings.Split(brokerCtrl.brokerAddr, ":")
+	ip := tokens[0]
+	port, _ := strconv.Atoi(tokens[1])
+
+	var topics []string
+
+	fmt.Println("Checking if multiple hierarchical topics with one subscriber and one publisher work...")
+
+	for i := range 5 {
+		topics = append(topics, "animals-cats-cat"+strconv.Itoa(i))
+	}
+
+	// create a topic - animals
+	createTopic(t, ip, port, "animals")
+
+	// create the sub topics
+	for _, topic := range topics {
+		createTopic(t, ip, port, topic)
+	}
+
+	// create a consumer group - cats
+	cgId := createConsumerGroup(t, ip, port, "animals-cats")
+
+	// create a subscriber for cats
+	subId := createSubscriber(t, ip, port, "animals-cats", cgId)
+
+	var originalMessages []string
+
+	// publish a message to all cats topics
+	for i, topic := range topics {
+		message1 := "meow" + strconv.Itoa(i)
+		message2 := "purr" + strconv.Itoa(i)
+		originalMessages = append(originalMessages, message1, message2)
+		publishMessage(t, ip, port, topic, "", message1)
+		publishMessage(t, ip, port, topic, "", message2)
+	}
+
+	var resultMessages []string
+
+	// consume the messages
+	// a single read on the cats topic should fetch all the messages
+	timeout := time.After(1 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	done := false
+	for !done {
+		select {
+		case <-ticker.C:
+			messages := readMessage(t, ip, port, "animals-cats", cgId, subId)
+			if len(messages) == 0 {
+				if len(resultMessages) == len(originalMessages) {
+					done = true
+				}
+				continue
+			}
+			resultMessages = append(resultMessages, messages...)
+			if len(resultMessages) == len(originalMessages) {
+				done = true
+			}
+		case <-timeout:
+			t.Fatalf("Timeout waiting for all messages. Expected %d messages, got %d", len(originalMessages), len(resultMessages))
+		}
+	}
+
+	if len(resultMessages) != len(originalMessages) {
+		t.Fatalf("Expected %v messages, got %v", len(originalMessages), len(resultMessages))
+	}
+
+	// check if the messages are the same, but the order is not important
+	sort.Strings(originalMessages)
+	sort.Strings(resultMessages)
+
+	for i := range originalMessages {
+		if originalMessages[i] != resultMessages[i] {
+			t.Fatalf("Expected message %v to be %v, got %v", i, originalMessages[i], resultMessages[i])
+		}
+	}
+
+	fmt.Println("ok")
+
+	fmt.Println("Checking for multiple publishers and multiple subscribers...")
+
+	// create a new topic - animals-elephants-white
+	t1 := "pet-dog"
+	t2 := "pet-llama"
+	createTopic(t, ip, port, t1)
+	createTopic(t, ip, port, t2)
+
+	// create 2 consumer groups
+	cgId1 := createConsumerGroup(t, ip, port, "pet")
+	cgId2 := createConsumerGroup(t, ip, port, "pet")
+
+	// now we need to add 2 subscribers to CG1, and 4 to CG2
+	p, q := 2, 4
+	subs1 := make([]string, p)
+	subs2 := make([]string, q)
+	for i := 0; i < p; i++ {
+		subs1[i] = createSubscriber(t, ip, port, "pet", cgId1)
+	}
+	for i := 0; i < q; i++ {
+		subs2[i] = createSubscriber(t, ip, port, "pet", cgId2)
+	}
+
+	// Create channels for each consumer group
+	cg1Chan := make(chan string, 20)
+	cg2Chan := make(chan string, 20)
+
+	// Start both consumer groups
+	subCtx1, cancel1 := context.WithCancel(context.Background())
+	subCtx2, cancel2 := context.WithCancel(context.Background())
+	startConsumerGroup(subCtx1, t, ip, port, "pet", cgId1, subs1, cg1Chan)
+	startConsumerGroup(subCtx2, t, ip, port, "pet", cgId2, subs2, cg2Chan)
+
+	// start publishers
+	startPublisher2(t, ip, port, t1, 10, "p1")
+	startPublisher2(t, ip, port, t2, 10, "p2")
+
+	// Wait until both consumer groups receive all messages or timeout after 15 seconds on slow machines
+	timeout = time.After(5 * time.Second)
+	ticker = time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	cg1Messages := make(map[string]bool)
+	cg2Messages := make(map[string]bool)
+
+	for len(cg1Messages) < 20 || len(cg2Messages) < 20 {
+		select {
+		case msg := <-cg1Chan:
+			cg1Messages[msg] = true
+		case msg := <-cg2Chan:
+			cg2Messages[msg] = true
+		case <-ticker.C:
+			continue
+		case <-timeout:
+			t.Fatalf("Timeout waiting for all messages. CG1 received %d, CG2 received %d out of %v messages",
+				len(cg1Messages), len(cg2Messages), 20)
+		}
+	}
+
+	cancel1()
+	cancel2()
+
+	expectedMessages := make(map[string]bool)
+	for i := 0; i < 10; i++ {
+		expectedMessages["p1-"+strconv.Itoa(i)] = true
+		expectedMessages["p2-"+strconv.Itoa(i)] = true
+	}
+	for msg := range expectedMessages {
+		if !cg1Messages[msg] {
+			t.Fatalf("CG1 missing message: %s", msg)
+		}
+		if !cg2Messages[msg] {
+			t.Fatalf("CG2 missing message: %s", msg)
+		}
+	}
+	if len(cg1Messages) != len(expectedMessages) {
+		t.Fatalf("CG1 expected %d messages, received %d", len(expectedMessages), len(cg1Messages))
+	}
+	if len(cg2Messages) != len(expectedMessages) {
+		t.Fatalf("CG2 expected %d messages, received %d", len(expectedMessages), len(cg2Messages))
+	}
+
+	fmt.Println("ok")
+}
+

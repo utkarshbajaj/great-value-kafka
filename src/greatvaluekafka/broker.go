@@ -61,8 +61,8 @@ type Broker struct {
 	// the http listener for the rpc server
 	rpcListener net.Listener
 
-	// the broker's topics
-	Topics sync.Map
+	// the topic tree
+	topicTreeRoot *TopicTreeNode
 }
 
 // BrokerOpts are the options for creating a new broker
@@ -97,8 +97,10 @@ type BrokerOpts struct {
 // NewBroker creates a new broker
 func NewBroker(bOpts *BrokerOpts) *Broker {
 	b := &Broker{
+		// The root node is not linked to any topic, it's just a placeholder
+		// The children should be linked to topics
+		topicTreeRoot:    NewTopicTreeNode("/"),
 		brokerIndex:      bOpts.BrokerIndex,
-		Topics:           sync.Map{},
 		controllerStub:   rpc.NewServer(),
 		numPartitions:    bOpts.NumPartitions,
 		maxPartitionSize: bOpts.MaxPartitionSize,
@@ -213,27 +215,27 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received topic creation request: %v", req)
 
-	// check if the topic already exists
-	if _, ok := b.Topics.Load(req.Name); ok {
+	// the topic will be split by the "-" character
+	// this should have been / but becuase of this being in the url path,
+	// that would make it significantly difficult, and it is too late to refactor
+	// it into the message body now
+	// for e.g. animals-cats-ginger
+	tokens := strings.Split(req.Name, "-")
+
+	// Check if the topic already exists in the topic tree
+	if t := b.topicTreeRoot.Search(tokens, 0); t != nil {
 		w.WriteHeader(http.StatusOK)
-		// TODO: return all relevant topic metadata
 		w.Write([]byte(req.Name))
 		return
 	}
 
-	// create the topic
-	topicOpts := &TopicOpts{
-		Name:             req.Name,
-		Partitions:       b.numPartitions,
-		MaxPartitionSize: b.maxPartitionSize,
-		TTLMs:            b.ttlMs,
-		SweepInterval:    b.sweepInterval,
-	}
-	topic := NewTopic(topicOpts)
-	b.Topics.Store(req.Name, topic)
-	log.Printf("Created topic %v", topic.Name)
+	// Create the topic in the topic tree
+	b.topicTreeRoot.Create(tokens, 0)
+	log.Printf("Created topic %v", req.Name)
+
+	// b.Topics.Store(req.Name, topic)
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(topic.Name))
+	w.Write([]byte(req.Name))
 }
 
 // handleTopicSubscribe creates a new consumer group for the topic, then
@@ -261,22 +263,61 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received topic subscription request: %v", topicName)
 
-	// check if the topic exists
-	topic, ok := b.Topics.Load(topicName)
-	if !ok {
+	// Check if the topic exists in the topic tree
+	topicTokens := strings.Split(topicName, "-")
+	var t *TopicTreeNode
+	if t = b.topicTreeRoot.Search(topicTokens, 0); t == nil {
 		http.Error(w, "Topic not found for "+topicName, http.StatusNotFound)
 		return
 	}
 
 	// Typecase the topic to a *Topic
-	topicPtr := topic.(*Topic)
+	topicPtr := t.Topic
 
+	topicOpts := &TopicOpts{
+		Name:             topicName,
+		Partitions:       b.numPartitions,
+		MaxPartitionSize: b.maxPartitionSize,
+		TTLMs:            b.ttlMs,
+		SweepInterval:    b.sweepInterval,
+	}
+
+	if topicPtr == nil {
+		topicPtr = NewTopic(topicOpts)
+		t.Topic = topicPtr
+	}
+
+	var parentConsumerGroup *ConsumerGroup
 	// create a new consumer group
 	consumerGroupId := uuid.New()
-	consumerGroupPtr := NewConsumerGroup(consumerGroupId.String())
+	parentConsumerGroup = NewConsumerGroup(consumerGroupId.String())
 
 	// add the consumer group to the topic
-	topicPtr.AddConsumerGroup(consumerGroupId.String(), consumerGroupPtr)
+	// topicPtr.ConsumerGroups.Store(consumerGroupId.String(), parentConsumerGroup)
+	topicPtr.AddConsumerGroup(consumerGroupId.String(), parentConsumerGroup)
+
+	// now we need to add new consumer groups to all the leaf nodes from this node as well
+	// do we need to maintain a map of this somewhere?
+	for _, leafNode := range t.GetLeafNodes() {
+		consumerGroupId := uuid.New()
+		consumerGroupPtr := NewConsumerGroup(consumerGroupId.String())
+		if leafNode.Topic == nil {
+			topicOpts := &TopicOpts{
+				Name:             leafNode.Name,
+				Partitions:       b.numPartitions,
+				MaxPartitionSize: b.maxPartitionSize,
+				TTLMs:            b.ttlMs,
+				SweepInterval:    b.sweepInterval,
+			}
+			leafNode.Topic = NewTopic(topicOpts)
+		}
+		// leafNode.Topic.ConsumerGroups.Store(consumerGroupId.String(), consumerGroupPtr)
+		leafNode.Topic.AddConsumerGroup(consumerGroupId.String(), consumerGroupPtr)
+
+		// add the consumer group to the parent consumer group as a dependent consumer group
+		parentConsumerGroup.DependentConsumerGroups = append(parentConsumerGroup.DependentConsumerGroups, consumerGroupPtr)
+		parentConsumerGroup.DependentTopics = append(parentConsumerGroup.DependentTopics, leafNode.Topic)
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(consumerGroupId.String()))
@@ -305,14 +346,15 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// make sure the topic exists
-	topic, ok := b.Topics.Load(topicName)
-	if !ok {
+	// make sure the topic exists in the topic tree
+	topicTokens := strings.Split(topicName, "-")
+	var t *TopicTreeNode
+	if t = b.topicTreeRoot.Search(topicTokens, 0); t == nil {
 		http.Error(w, "Topic not found", http.StatusNotFound)
 		return
 	}
 
-	topicPtr := topic.(*Topic)
+	topicPtr := t.Topic
 
 	// parse the consumer group id from the URL
 	cgId := tokens[4]
@@ -328,7 +370,7 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	consumerGroupPtr := consumerGroup.(*ConsumerGroup)
+	parentConsumerGroupPtr := consumerGroup.(*ConsumerGroup)
 
 	// parse the subscriber id from the URL
 	subscriberId, err := uuid.Parse(tokens[6])
@@ -337,18 +379,52 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Received topic consume request for subscriber %v", subscriberId)
+	// get all the dependent subscribers for this subscriber
+	dependentSubscribers := parentConsumerGroupPtr.DependentSubscribers[subscriberId.String()]
+	// log.Printf("Received topic consume request for subscriber %v", subscriberId)
 
-	subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
-	subscriberPtr := (*consumerGroupPtr.Subscribers)[subIndex]
+	// subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
+	// subscriberPtr := (*consumerGroupPtr.Subscribers)[subIndex]
 
-	// read the topic for the subscriber
-	items := topicPtr.ReadBySub(subscriberPtr)
+	items := make([]string, 0)
+	resultCh := make(chan []string, len(dependentSubscribers))
+
+	var wg sync.WaitGroup
+	// for all the dependent subscribers, read the topic
+	for _, dependentSubscriberId := range dependentSubscribers {
+		// read the topic for this subscriber
+		dependentConsumerGroupIndex := parentConsumerGroupPtr.DependentSubscriberIndex[dependentSubscriberId]
+		dependentConsumerGroupPtr := parentConsumerGroupPtr.DependentConsumerGroups[dependentConsumerGroupIndex]
+		dependentTopicPtr := parentConsumerGroupPtr.DependentTopics[dependentConsumerGroupIndex]
+
+		wg.Add(1)
+		go func(dependentSubscriberId string, dependentConsumerGroupPtr *ConsumerGroup, dependentTopicPtr *Topic) {
+			defer wg.Done()
+			resultCh <- b.readTopicForSubscriber(uuid.MustParse(dependentSubscriberId), dependentConsumerGroupPtr, dependentTopicPtr)
+		}(dependentSubscriberId, dependentConsumerGroupPtr, dependentTopicPtr)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	for item := range resultCh {
+		items = append(items, item...)
+	}
 
 	// return the items to the subscriber in a json array
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(items)
+}
+
+func (b *Broker) readTopicForSubscriber(subscriberId uuid.UUID, consumerGroupPtr *ConsumerGroup, topicPtr *Topic) []string {
+	subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
+	ptrSubscriberPtr := consumerGroupPtr.Subscribers
+	subscriberPtr := (*ptrSubscriberPtr)[subIndex]
+
+	return topicPtr.ReadBySub(subscriberPtr)
 }
 
 // handleTopicPublish handles a publish request for a topic
@@ -367,15 +443,30 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received topic publish request: %v", topicName)
 
-	// check if the topic exists
-	topic, ok := b.Topics.Load(topicName)
-	if !ok {
+	// Check if the topic exists in the topic tree
+	topicTokens := strings.Split(topicName, "-")
+	var t *TopicTreeNode
+	if t = b.topicTreeRoot.Search(topicTokens, 0); t == nil {
 		http.Error(w, "Topic not found", http.StatusNotFound)
 		return
 	}
 
 	// Typecase the topic to a *Topic
-	topicPtr := topic.(*Topic)
+	topicPtr := t.Topic
+
+	if topicPtr == nil {
+		// this is the first time we are publishing to this topic
+		// or a subscriber was never created for this topic
+		topicOpts := &TopicOpts{
+			Name:             topicName,
+			Partitions:       b.numPartitions,
+			MaxPartitionSize: b.maxPartitionSize,
+			TTLMs:            b.ttlMs,
+			SweepInterval:    b.sweepInterval,
+		}
+		topicPtr = NewTopic(topicOpts)
+		t.Topic = topicPtr
+	}
 
 	var req TopicPublishRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
@@ -406,13 +497,19 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 	}
 
 	topicName := tokens[2]
-	topic, ok := b.Topics.Load(topicName)
-	if !ok {
+
+	// Check if the topic exists in the topic tree
+	topicTokens := strings.Split(topicName, "-")
+	var t *TopicTreeNode
+	if t = b.topicTreeRoot.Search(topicTokens, 0); t == nil {
 		http.Error(w, "Topic not found for "+topicName, http.StatusNotFound)
 		return
 	}
 
-	topicPtr := topic.(*Topic)
+	fmt.Println("name of the treenode is " + t.Name)
+	fmt.Println(t.Topic)
+
+	topicPtr := t.Topic
 
 	cgId := tokens[4]
 	if cgId == "" {
@@ -435,6 +532,22 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Max subscribers reached "+strconv.Itoa(b.numPartitions), http.StatusBadRequest)
 		return
 	}
+
+	// add the subscriber to the consumer group
+	parentSubscriberId := b.addSubscriberToConsumerGroup(consumerGroupPtr)
+
+	// create new subscribers to all depedent consumer groups for this group as well
+	for i, dependentConsumerGroup := range consumerGroupPtr.DependentConsumerGroups {
+		subscriberId := b.addSubscriberToConsumerGroup(dependentConsumerGroup)
+		consumerGroupPtr.DependentSubscribers[parentSubscriberId] = append(consumerGroupPtr.DependentSubscribers[parentSubscriberId], subscriberId)
+		consumerGroupPtr.DependentSubscriberIndex[subscriberId] = i
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(parentSubscriberId))
+}
+
+func (b *Broker) addSubscriberToConsumerGroup(consumerGroupPtr *ConsumerGroup) string {
 
 	subscriber := NewSubscriber(b.numPartitions)
 	*consumerGroupPtr.Subscribers = append(*consumerGroupPtr.Subscribers, subscriber)
@@ -467,6 +580,5 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 		log.Printf("%v Subscriber %v should read partitions: %v", i, subscriber.Id, subscriber.ShouldReadPartition)
 	}
 
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(subscriber.Id.String()))
+	return subscriber.Id.String()
 }
