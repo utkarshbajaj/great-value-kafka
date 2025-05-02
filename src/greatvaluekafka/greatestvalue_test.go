@@ -10,7 +10,14 @@ import (
 
 func Test_HierarchicalTopicTree(t *testing.T) {
 	// Create a new broker controller
-	brokerCtrl := newBrokerController(t, 1, 5)
+	brokerOpts := &newBrokerControllerOpts{
+		groupSize:        1,
+		numPartitions:    5,
+		maxPartitionSize: 1000,
+		TTLMs:            99999,
+		SweepInterval:    99,
+	}
+	brokerCtrl := newBrokerController(t, brokerOpts)
 
 	tokens := strings.Split(brokerCtrl.brokerAddr, ":")
 	ip := tokens[0]
@@ -52,7 +59,7 @@ func Test_HierarchicalTopicTree(t *testing.T) {
 	var resultMessages []string
 
 	// consume the messages
-	// a sincle read on the cats topic should fetch all the messages
+	// a single read on the cats topic should fetch all the messages
 
 	for {
 		messages := readMessage(t, ip, port, "animals-cats", cgId, subId)

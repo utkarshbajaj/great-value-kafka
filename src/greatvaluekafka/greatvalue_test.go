@@ -9,9 +9,9 @@ import (
 	"math/rand"
 	"net/http"
 	"net/rpc"
-	// "sort"
+	"sort"
 	"strconv"
-	// "strings"
+	"strings"
 	"testing"
 	"time"
 )
@@ -185,7 +185,6 @@ func readMessage(t *testing.T, ip string, port int, topicName string, consumerGr
 	return messages
 }
 
-/*
 // TODO: Add tests for this
 // Test that the endpoints are working well
 // Test that you can deactivate and activate the broker and the HTTP request behave the same way
@@ -899,4 +898,3 @@ func TestFinal_BrokerLoadBalancing(t *testing.T) {
 func TestFinal_OverlappingTopicsAndHierachicalReads(t *testing.T) {
 	// t.Errorf("Test 7 Not implemented")
 }
-*/

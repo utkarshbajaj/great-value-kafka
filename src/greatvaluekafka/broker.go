@@ -391,7 +391,7 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 
 	// get all the dependent subscribers for this subscriber
 	dependentSubscribers := parentConsumerGroupPtr.DependentSubscribers[subscriberId.String()]
-	log.Printf("Received topic consume request for subscriber %v", subscriberId)
+	// log.Printf("Received topic consume request for subscriber %v", subscriberId)
 
 	// subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
 	// subscriberPtr := (*consumerGroupPtr.Subscribers)[subIndex]
