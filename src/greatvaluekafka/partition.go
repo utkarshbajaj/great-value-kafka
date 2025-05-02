@@ -115,7 +115,7 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 func (p *Partition) Enqueue(item *PartitionItem) {
 	p.partitionLock.Lock()
 	defer p.partitionLock.Unlock()
-	log.Printf("Enqueueing item: %v", item.Message)
+	log.Printf("Enqueueing item: %v", string(item.Message))
 
 	// add item to the queue
 	p.queue = append(p.queue, item)
@@ -157,7 +157,7 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 	// TODO: Does this cover all the edge cases?
 	sub.ReadIndex[p.Id] = p.head + realIndex + 1
 
-	log.Printf("Read index for subscriber %v is now %v", sub.Id, sub.ReadIndex[p.Id])
+	log.Printf("[Partition %v] Read index for subscriber %v is now %v", p.Id, sub.Id, sub.ReadIndex[p.Id])
 
 	return item
 }

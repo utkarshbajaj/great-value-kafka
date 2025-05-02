@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -92,8 +93,9 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 	// Register handlers
 	mux.HandleFunc("/topics", b.handleTopicCreate)
 	mux.HandleFunc("/topics/{name}/subscribe", b.handleTopicSubscribe)
-	mux.HandleFunc("/subscribers/{id}/topics/{name}", b.handleTopicConsume)
+	mux.HandleFunc("/topics/{name}/consumer-groups/{cgid}/subscribers/{sid}", b.handleTopicConsume)
 	mux.HandleFunc("/topics/{name}/publish", b.handleTopicPublish)
+	mux.HandleFunc("/topics/{name}/consumer-groups/{id}/subscribe", b.handleConsumerGroupSubscribe)
 
 	b.httpServer = &http.Server{
 		Addr:    bOpts.BrokerAddr,
@@ -169,6 +171,9 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// lowercase the topic name
+	req.Name = strings.ToLower(req.Name)
+
 	log.Printf("Received topic creation request: %v", req)
 
 	// check if the topic already exists
@@ -182,19 +187,28 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 	// create the topic
 	topic := NewTopic(req.Name, NUM_PARTITIONS)
 	b.Topics.Store(req.Name, topic)
+	log.Printf("Created topic %v", topic.Name)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(topic.Name))
 }
 
-// handleTopicSubscribe handles a topic subscription request
+// handleTopicSubscribe creates a new consumer group for the topic, then
+// returns the consumer group id
 func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
 	}
 
+	tokens := strings.Split(r.URL.Path, "/")
+
+	if len(tokens) != 4 {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
 	// parse the topic name from the URL
-	topicName := r.URL.Path[len("/topics/") : len(r.URL.Path)-len("/subscribe")]
+	topicName := strings.ToLower(tokens[2])
 
 	if topicName == "" {
 		http.Error(w, "Invalid topic name", http.StatusBadRequest)
@@ -206,17 +220,22 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	// check if the topic exists
 	topic, ok := b.Topics.Load(topicName)
 	if !ok {
-		http.Error(w, "Topic not found", http.StatusNotFound)
+		http.Error(w, "Topic not found for "+topicName, http.StatusNotFound)
 		return
 	}
 
 	// Typecase the topic to a *Topic
 	topicPtr := topic.(*Topic)
 
-	subscriberId := topicPtr.Subscribe()
+	// create a new consumer group
+	consumerGroupId := uuid.New()
+	consumerGroupPtr := NewConsumerGroup(consumerGroupId.String())
+
+	// add the consumer group to the topic
+	topicPtr.ConsumerGroups.Store(consumerGroupId.String(), consumerGroupPtr)
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(subscriberId.String()))
+	w.Write([]byte(consumerGroupId.String()))
 }
 
 // handleTopicConsume handles a read request for a topic
@@ -230,52 +249,58 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 	// the URL should be in the format /subscribers/{id}/topics/{name}
 	tokens := strings.Split(r.URL.Path, "/")
 
-	if len(tokens) != 5 {
+	if len(tokens) != 7 {
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
 
-	// Check if the subscriber id is a valid UUID
-	subscriberId, err := uuid.Parse(tokens[2])
-
-	if err != nil {
-		http.Error(w, "Invalid subscriber id, must be a valid UUID", http.StatusBadRequest)
-		return
-	}
-
-	topicName := tokens[4]
+	// parse the topic name from the URL
+	topicName := strings.ToLower(tokens[2])
 	if topicName == "" {
 		http.Error(w, "Invalid topic name", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Received read request for topic %v and subscriber %v", topicName, subscriberId)
-
-	// check if the topic exists
+	// make sure the topic exists
 	topic, ok := b.Topics.Load(topicName)
 	if !ok {
 		http.Error(w, "Topic not found", http.StatusNotFound)
 		return
 	}
 
-	// Typecase the topic to a *Topic
 	topicPtr := topic.(*Topic)
 
-	// check if the subscriber exists
-	subscriber, exists := topicPtr.Subscribers.Load(subscriberId)
-	if !exists {
-		http.Error(w, "Subscriber not found", http.StatusNotFound)
+	// parse the consumer group id from the URL
+	cgId := tokens[4]
+	if cgId == "" {
+		http.Error(w, "Invalid consumer group id", http.StatusBadRequest)
 		return
 	}
 
-	// Typecast the subscriber to a *Subscriber
-	subscriberPtr := subscriber.(*Subscriber)
+	// Check if the consumer group exists
+	consumerGroup, ok := topicPtr.ConsumerGroups.Load(cgId)
+	if !ok {
+		http.Error(w, "Consumer group not found for "+cgId, http.StatusNotFound)
+		return
+	}
+
+	consumerGroupPtr := consumerGroup.(*ConsumerGroup)
+
+	// parse the subscriber id from the URL
+	subscriberId, err := uuid.Parse(tokens[6])
+	if err != nil {
+		http.Error(w, "Invalid subscriber id, must be a valid UUID", http.StatusBadRequest)
+		return
+	}
+	
+	subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
+	subscriberPtr := consumerGroupPtr.Subscribers[subIndex]
 
 	// read the topic for the subscriber
 	items := topicPtr.ReadBySub(subscriberPtr)
 
-	// return the items as a json array
-	w.Header().Set("Content-Type", "application/json")
+	// return the items to the subscriber in a json array
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(items)
 }
@@ -318,4 +343,85 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 	go topicPtr.PushToPartition([]byte(req.Message), req.Key)
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleConsumerGroupSubscribe handles a consumer group subscription request
+func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// parse the consumer group id from the URL
+	tokens := strings.Split(r.URL.Path, "/")
+
+	if len(tokens) != 6 {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
+	topicName := tokens[2]
+	topic, ok := b.Topics.Load(topicName)
+	if !ok {
+		http.Error(w, "Topic not found for "+topicName, http.StatusNotFound)
+		return
+	}
+
+	topicPtr := topic.(*Topic)
+
+	cgId := tokens[4]
+	if cgId == "" {
+		http.Error(w, "Invalid consumer group id", http.StatusBadRequest)
+		return
+	}
+
+	// Check if the consumer group exists
+	consumerGroup, ok := topicPtr.ConsumerGroups.Load(cgId)
+	if !ok {
+		http.Error(w, "Consumer group not found for "+cgId, http.StatusNotFound)
+		return
+	}
+
+	// Typecast the consumer group to a *ConsumerGroup
+	consumerGroupPtr := consumerGroup.(*ConsumerGroup)
+
+	// dont allow more subs than partitions
+	if len(consumerGroupPtr.Subscribers) >= NUM_PARTITIONS {
+		http.Error(w, "Max subscribers reached " + strconv.Itoa(NUM_PARTITIONS), http.StatusBadRequest)
+		return
+	}
+
+	subscriber := NewSubscriber(NUM_PARTITIONS)
+	consumerGroupPtr.Subscribers = append(consumerGroupPtr.Subscribers, subscriber)	
+	consumerGroupPtr.SubscriberIndex[subscriber.Id] = len(consumerGroupPtr.Subscribers) - 1
+
+	// we will need to ensure that each subscriber is now remapped to new partitions
+	// we decide with partitions_per_sub = partitions/subscribers
+	numSubs := len(consumerGroupPtr.Subscribers)
+	partitionsPerSub := NUM_PARTITIONS / numSubs
+
+	// reset mappings for each subscriber
+	for _, subscriber := range consumerGroupPtr.Subscribers {
+		subscriber.ShouldReadPartition = make([]bool, NUM_PARTITIONS)
+	}
+
+	// TODO: remove log; print the numSubs, partitionsPerSub, and subscribers 
+	log.Printf("Subscribers: %v, partitionsPerSub: %v, numSubscribers: %v", numSubs, partitionsPerSub, numSubs)
+
+	// remap the subscriber to the new partitions
+	currSub := 0
+	for i := range(NUM_PARTITIONS) {
+		consumerGroupPtr.Subscribers[currSub].ShouldReadPartition[i] = true
+		if (i+1) % partitionsPerSub == 0 {
+			currSub = (currSub + 1) % numSubs
+		}
+	}
+
+	// TODO: remove log; for each subscriber, should print which paritions they should read
+	for i, subscriber := range consumerGroupPtr.Subscribers {
+		log.Printf("%v Subscriber %v should read partitions: %v", i, subscriber.Id, subscriber.ShouldReadPartition)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(subscriber.Id.String()))
 }

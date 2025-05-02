@@ -3,9 +3,6 @@ package greatvaluekafka
 import (
 	"math/rand"
 	"sync"
-
-	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 )
 
 type Topic struct {
@@ -15,8 +12,8 @@ type Topic struct {
 	// topic partitions
 	Partitions []*Partition
 
-	// topic subscribers
-	Subscribers sync.Map // map[int]*Subscriber
+	// topic consumer groups
+	ConsumerGroups sync.Map // map[string]*ConsumerGroup
 }
 
 // NewTopic creates a new topic with the given name and partitions
@@ -25,7 +22,7 @@ func NewTopic(name string, partitions int) *Topic {
 	topic := &Topic{
 		Name:        name,
 		Partitions:  make([]*Partition, partitions),
-		Subscribers: sync.Map{},
+		ConsumerGroups: sync.Map{},
 	}
 
 	// create the partitions
@@ -40,32 +37,24 @@ func NewTopic(name string, partitions int) *Topic {
 	return topic
 }
 
-// TODO: Change this to a different data structure if we want to support unsubscribing
-
-// Subscribe adds a subscriber to the topic
-func (t *Topic) Subscribe() uuid.UUID {
-	// add the subscriber to the topic
-	subscriber := NewSubscriber(NUM_PARTITIONS)
-	t.Subscribers.Store(subscriber.Id, subscriber)
-
-	return subscriber.Id
-}
 
 // 1. How many return values per patrition? 10 for now
 // 2. How do we select the partition to take out the value from? Round robin
 
 func (t *Topic) ReadBySub(sub *Subscriber) []string {
-	log.Printf("Read request by subscriber: %v", sub.Id)
+	// log.Printf("Read request by subscriber: %v", sub.Id)
 	// Loop through the partitions and dequeue the items
 	itemsFetched := 0
 	batch := make([]string, 0)
 
 	for itemsFetched < MAX_POLL_RECORDS {
-		log.Printf("Looping through partitions")
 		foundItem := false
 
 		for j := range t.Partitions {
-			log.Printf("Reading partition %v", j)
+			if !sub.ShouldReadPartition[j] {
+				continue
+			}
+			// log.Printf("Reading partition %v", j)
 
 			// dequeue the items from the partition
 			item := t.Partitions[j].ReadBySub(sub)
@@ -77,7 +66,7 @@ func (t *Topic) ReadBySub(sub *Subscriber) []string {
 
 			batch = append(batch, string(item.Message))
 			itemsFetched++
-			log.Printf("Found item: %v", string(item.Message))
+			// log.Printf("Found item: %v", string(item.Message))
 
 			if itemsFetched >= MAX_POLL_RECORDS {
 				break
@@ -88,7 +77,6 @@ func (t *Topic) ReadBySub(sub *Subscriber) []string {
 			break
 		}
 	}
-
 	return batch
 }
 

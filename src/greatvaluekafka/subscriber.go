@@ -10,6 +10,9 @@ type Subscriber struct {
 	// the subscriber's id
 	Id uuid.UUID
 
+	// if the subscribers reads this partition or nor
+	ShouldReadPartition []bool
+	
 	// the index of the last read item per partition
 	ReadIndex []int
 
@@ -20,6 +23,7 @@ type Subscriber struct {
 func NewSubscriber(partitionCount int) *Subscriber {
 	return &Subscriber{
 		Id:        uuid.New(),
+		ShouldReadPartition: make([]bool, partitionCount),
 		ReadIndex: make([]int, partitionCount),
 	}
 }
