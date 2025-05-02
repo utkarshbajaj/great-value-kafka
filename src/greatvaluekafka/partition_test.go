@@ -120,7 +120,7 @@ func Test_Partition_Enqueue_Concurrent(t *testing.T) {
 		t.Fatalf("Expected partition to have %d messages, got %d", largeMaxSize, len(p.queue))
 	}
 }
-	
+
 func Test_Partition_Enqueue_TooManyConcurrent(t *testing.T) {
 	// create a new partition
 	p := createPartition(defaultMaxSize)

@@ -86,7 +86,7 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 		subs[i].subMtx.RLock()
 		index := subs[i].ReadIndex[p.Id]
 		subs[i].subMtx.RUnlock()
-		
+
 		if index < minIndex {
 			minIndex = index
 		}
@@ -115,7 +115,7 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 func (p *Partition) Enqueue(item *PartitionItem) {
 	p.partitionLock.Lock()
 	defer p.partitionLock.Unlock()
-	log.Printf("Enqueueing item: %v", string(item.Message))
+	// log.Printf("Enqueueing item: %v", string(item.Message))
 
 	// add item to the queue
 	p.queue = append(p.queue, item)

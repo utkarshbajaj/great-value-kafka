@@ -50,6 +50,12 @@ type Broker struct {
 	shouldListen   bool
 	controllerStub *rpc.Server
 
+	// number of partitions per Topics
+	numPartitions int
+
+	// the http listener for the rpc server
+	rpcListener net.Listener
+
 	// the broker's topics
 	Topics sync.Map
 }
@@ -58,11 +64,20 @@ type Broker struct {
 type BrokerOpts struct {
 	BrokerIndex int
 
+	// number of partitions per Topics
+	NumPartitions int
+
 	// the address that pub/sub clients connect to
 	BrokerAddr string
 
 	// the address that listens to the controller
 	ControlAddr string
+
+	// rpc path
+	RPCPath string
+
+	// debug path
+	DebugPath string
 }
 
 // NewBroker creates a new broker
@@ -71,6 +86,7 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 		brokerIndex:    bOpts.BrokerIndex,
 		Topics:         sync.Map{},
 		controllerStub: rpc.NewServer(),
+		numPartitions:  bOpts.NumPartitions,
 	}
 
 	// Make sure this does not cause a deadlock
@@ -79,13 +95,14 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 	}
 
 	b.controllerStub.Register(brokerRPC)
-	b.controllerStub.HandleHTTP(rpc.DefaultRPCPath, rpc.DefaultDebugPath)
+	b.controllerStub.HandleHTTP(bOpts.RPCPath, bOpts.DebugPath)
 
-	listener, err := net.Listen("tcp", bOpts.ControlAddr)
+	var err error
+	b.rpcListener, err = net.Listen("tcp", bOpts.ControlAddr)
 	if err != nil {
 		log.Fatal().Err(err).Msgf("Failed to listen on %s", bOpts.ControlAddr)
 	}
-	go http.Serve(listener, nil)
+	go http.Serve(b.rpcListener, nil)
 
 	// create multiplexer
 	mux := http.NewServeMux()
@@ -132,6 +149,9 @@ func (b *Broker) Deactivate() error {
 func (b *Broker) Terminate() error {
 	b.shouldListen = false
 	b.httpServer.Close()
+
+	// kill the rpc httpServer
+	b.rpcListener.Close()
 
 	return nil
 }
@@ -185,7 +205,7 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// create the topic
-	topic := NewTopic(req.Name, NUM_PARTITIONS)
+	topic := NewTopic(req.Name, b.numPartitions)
 	b.Topics.Store(req.Name, topic)
 	log.Printf("Created topic %v", topic.Name)
 	w.WriteHeader(http.StatusCreated)
@@ -234,7 +254,7 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	// add the consumer group to the topic
 	topicPtr.ConsumerGroups.Store(consumerGroupId.String(), consumerGroupPtr)
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(consumerGroupId.String()))
 }
 
@@ -292,7 +312,7 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid subscriber id, must be a valid UUID", http.StatusBadRequest)
 		return
 	}
-	
+
 	subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
 	subscriberPtr := consumerGroupPtr.Subscribers[subIndex]
 
@@ -386,33 +406,33 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 	consumerGroupPtr := consumerGroup.(*ConsumerGroup)
 
 	// dont allow more subs than partitions
-	if len(consumerGroupPtr.Subscribers) >= NUM_PARTITIONS {
-		http.Error(w, "Max subscribers reached " + strconv.Itoa(NUM_PARTITIONS), http.StatusBadRequest)
+	if len(consumerGroupPtr.Subscribers) >= b.numPartitions {
+		http.Error(w, "Max subscribers reached "+strconv.Itoa(b.numPartitions), http.StatusBadRequest)
 		return
 	}
 
-	subscriber := NewSubscriber(NUM_PARTITIONS)
-	consumerGroupPtr.Subscribers = append(consumerGroupPtr.Subscribers, subscriber)	
+	subscriber := NewSubscriber(b.numPartitions)
+	consumerGroupPtr.Subscribers = append(consumerGroupPtr.Subscribers, subscriber)
 	consumerGroupPtr.SubscriberIndex[subscriber.Id] = len(consumerGroupPtr.Subscribers) - 1
 
 	// we will need to ensure that each subscriber is now remapped to new partitions
 	// we decide with partitions_per_sub = partitions/subscribers
 	numSubs := len(consumerGroupPtr.Subscribers)
-	partitionsPerSub := NUM_PARTITIONS / numSubs
+	partitionsPerSub := b.numPartitions / numSubs
 
 	// reset mappings for each subscriber
 	for _, subscriber := range consumerGroupPtr.Subscribers {
-		subscriber.ShouldReadPartition = make([]bool, NUM_PARTITIONS)
+		subscriber.ShouldReadPartition = make([]bool, b.numPartitions)
 	}
 
-	// TODO: remove log; print the numSubs, partitionsPerSub, and subscribers 
+	// TODO: remove log; print the numSubs, partitionsPerSub, and subscribers
 	log.Printf("Subscribers: %v, partitionsPerSub: %v, numSubscribers: %v", numSubs, partitionsPerSub, numSubs)
 
 	// remap the subscriber to the new partitions
 	currSub := 0
-	for i := range(NUM_PARTITIONS) {
+	for i := range b.numPartitions {
 		consumerGroupPtr.Subscribers[currSub].ShouldReadPartition[i] = true
-		if (i+1) % partitionsPerSub == 0 {
+		if (i+1)%partitionsPerSub == 0 {
 			currSub = (currSub + 1) % numSubs
 		}
 	}
@@ -422,6 +442,6 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 		log.Printf("%v Subscriber %v should read partitions: %v", i, subscriber.Id, subscriber.ShouldReadPartition)
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(subscriber.Id.String()))
 }
