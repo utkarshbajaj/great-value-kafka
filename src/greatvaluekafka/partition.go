@@ -94,6 +94,7 @@ func NewPartition(opts *partitionOpts) *Partition {
 func (p *Partition) Dequeue(subs []*Subscriber) {
 	p.partitionLock.Lock()
 	defer p.partitionLock.Unlock()
+
 	// check if the queue is empty
 	if len(p.queue) == 0 {
 		return
@@ -131,7 +132,12 @@ func (p *Partition) Dequeue(subs []*Subscriber) {
 	// while expired(queue[i]), move minIndex forward
 	for IsExpired(p.ttlMs, p.queue[minIndex].createdAt.UnixMilli()) {
 		minIndex++
+		if minIndex >= len(p.queue) {
+			break
+		}
 	}
+
+	p.queue = p.queue[minIndex:]
 
 	// update the head of the queue
 	p.head = minIndex
@@ -149,7 +155,6 @@ func (p *Partition) Enqueue(item *PartitionItem) {
 	if len(*p.subscribers) == 0 {
 		return
 	}
-	log.Printf("%v subscribers for partition %v", len(*p.subscribers), p.Id)
 
 	// add item to the queue
 	p.queue = append(p.queue, item)
@@ -178,21 +183,14 @@ func (p *Partition) ReadBySub(sub *Subscriber) *PartitionItem {
 	defer p.partitionLock.RUnlock()
 
 	realIndex := max(sub.ReadIndex[p.Id]-p.head, 0)
-	log.Printf("Reading item at index: %v", realIndex)
 
-	if realIndex >= len(p.queue) {
+	if realIndex >= len(p.queue) || len(p.queue) == 0 {
+		sub.ReadIndex[p.Id] = p.head
 		return nil
 	}
 
-	// TODO: We should have a read lock on the queue
 	item := p.queue[realIndex]
-
-	// update the read index of the subscriber
-	// TODO: Does this cover all the edge cases?
 	sub.ReadIndex[p.Id] = p.head + realIndex + 1
-
-	log.Printf("[Partition %v] Read index for subscriber %v is now %v", p.Id, sub.Id, sub.ReadIndex[p.Id])
-
 	return item
 }
 

@@ -204,7 +204,7 @@ func TestFinalSinglePublishSingleSubscribe(t *testing.T) {
 		groupSize:        1,
 		numPartitions:    1,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -292,7 +292,7 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 		groupSize:        1,
 		numPartitions:    1,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -339,7 +339,7 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 		groupSize:        1,
 		numPartitions:    2,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -399,7 +399,7 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 		groupSize:        1,
 		numPartitions:    5,
 		maxPartitionSize: 3000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -478,7 +478,7 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 		groupSize:        2,
 		numPartitions:    5,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -569,7 +569,99 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 }
 
 func TestFinal_EvictionPolicy(t *testing.T) {
-	// t.Errorf("Test 3 Not implemented")
+	/*
+		PLAN:
+			- when no subscribers, no messages
+			- check for too many messages get evicted
+			- check that messages get evicted when they expire
+	*/
+	topicName := "cats"
+	sweepInterval := 5
+
+	brokerCtrl0 := newBrokerController(t, &newBrokerControllerOpts{
+		groupSize:        1,
+		numPartitions:    1,
+		maxPartitionSize: 50,
+		TTLMs:            2000,
+		SweepInterval:    sweepInterval,
+	})
+
+	tokens := strings.Split(brokerCtrl0.brokerAddr, ":")
+	ip := tokens[0]
+	port, _ := strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// publish 10 messages, should not persist
+	n := 10
+	for i := 0; i < n; i++ {
+		publishMessage(t, ip, port, topicName, "", "meow"+strconv.Itoa(i))
+	}
+
+	// create a consumer group
+	cgId := createConsumerGroup(t, ip, port, topicName)
+
+	// create a subscriber
+	subId := createSubscriber(t, ip, port, topicName, cgId)
+
+	// read the messages
+	messages := readMessage(t, ip, port, topicName, cgId, subId)
+
+	// verify
+	if len(messages) != 0 {
+		t.Fatalf("Expected 0 messages, got %v", len(messages))
+	}
+
+	fmt.Println("Passed test 3.0")
+
+	// publish 10 messages, should persist
+	n = 10
+	for i := 0; i < n; i++ {
+		publishMessage(t, ip, port, topicName, "", "meow"+strconv.Itoa(i))
+	}
+
+	// now publish 1 more, evict meow0
+	publishMessage(t, ip, port, topicName, "", "meow")
+
+	messages = readMessage(t, ip, port, topicName, cgId, subId)
+
+	// verify
+	if len(messages) != n {
+		t.Fatalf("Expected %v messages, got %v", n, len(messages))
+	}
+
+	for i := range messages {
+		if i == 9 {
+			break
+		}
+		if messages[i] != "meow"+strconv.Itoa(i+1) {
+			t.Fatalf("Expected message %v to be %v, got %v", i, "meow"+strconv.Itoa(i+1), messages[i])
+		}
+	}
+	if messages[9] != "meow" {
+		t.Fatalf("Expected message %v to be %v, got %v", 9, "meow", messages[9])
+	}
+
+	fmt.Println("Passed test 3.1")
+
+	// publish 10 messages, should persist
+	for i := 0; i < n; i++ {
+		publishMessage(t, ip, port, topicName, "", "meow"+strconv.Itoa(i))
+	}
+
+	// now if we wait for sweepInterval seconds, the messages should be evicted
+	time.Sleep(time.Duration(sweepInterval+1) * time.Second)
+
+	// read the messages
+	messages = readMessage(t, ip, port, topicName, cgId, subId)
+
+	// verify
+	if len(messages) != 0 {
+		t.Fatalf("Expected 0 messages, got %v", len(messages))
+	}
+
+	fmt.Println("Passed test 3.2")
 }
 
 func TestFinal_ReplicationFaultTolerance(t *testing.T) {
@@ -591,7 +683,7 @@ func TestFinal_KeyPartitionAssignmentConsistency(t *testing.T) {
 		groupSize:        1,
 		numPartitions:    1,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -633,7 +725,7 @@ func TestFinal_KeyPartitionAssignmentConsistency(t *testing.T) {
 		groupSize:        1,
 		numPartitions:    2,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -690,7 +782,7 @@ func TestFinal_KeyPartitionAssignmentConsistency(t *testing.T) {
 		groupSize:        1,
 		numPartitions:    5,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 
@@ -744,7 +836,7 @@ func TestFinal_KeyPartitionAssignmentConsistency(t *testing.T) {
 		groupSize:        2,
 		numPartitions:    2,
 		maxPartitionSize: 1000,
-		TTLMs:            99,
+		TTLMs:            99999,
 		SweepInterval:    99,
 	})
 

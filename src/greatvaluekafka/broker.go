@@ -337,6 +337,8 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Received topic consume request for subscriber %v", subscriberId)
+
 	subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
 	subscriberPtr := (*consumerGroupPtr.Subscribers)[subIndex]
 
