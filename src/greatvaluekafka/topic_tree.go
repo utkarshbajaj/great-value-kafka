@@ -9,8 +9,6 @@ type TopicTreeNode struct {
 
 	// the children node for the topic
 	Children []*TopicTreeNode
-
-	//
 }
 
 // NewTopicTreeNode creates a new topic tree node

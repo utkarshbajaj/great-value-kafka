@@ -15,6 +15,9 @@ type ConsumerGroup struct {
 	// if the consumer group has dependent consumer groups
 	DependentConsumerGroups []*ConsumerGroup
 
+	// if the consumer group has dependent topics
+	DependentTopics []*Topic
+
 	// the subscribers a subscriber is parent to in this consumer group
 	DependentSubscribers map[string][]string
 

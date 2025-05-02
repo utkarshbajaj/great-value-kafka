@@ -253,14 +253,11 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println("name of the treenode is " + t.Name)
-
 	// Typecase the topic to a *Topic
 	topicPtr := t.Topic
 
 	if topicPtr == nil {
 		topicPtr = NewTopic(topicName, b.numPartitions)
-		t.Topic = topicPtr
 	}
 
 	var parentConsumerGroup *ConsumerGroup
@@ -356,9 +353,8 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 		// read the topic for this subscriber
 		dependentConsumerGroupIndex := parentConsumerGroupPtr.DependentSubscriberIndex[dependentSubscriberId]
 		dependentConsumerGroupPtr := parentConsumerGroupPtr.DependentConsumerGroups[dependentConsumerGroupIndex]
-		dependentTopicPtr := parentConsumerGroupPtr.DependentTopics[dependentConsumerGroupIndex]
 
-		newItems := b.readTopicForSubscriber(uuid.MustParse(dependentSubscriberId), dependentConsumerGroupPtr, dependentTopicPtr)
+		newItems := b.readTopicForSubscriber(uuid.MustParse(dependentSubscriberId), dependentConsumerGroupPtr, topicPtr)
 		items = append(items, newItems...)
 	}
 
@@ -406,7 +402,6 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 		// this is the first time we are publishing to this topic
 		// or a subscriber was never created for this topic
 		topicPtr = NewTopic(topicName, b.numPartitions)
-		t.Topic = topicPtr
 	}
 
 	var req TopicPublishRequest
@@ -447,9 +442,6 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Topic not found for "+topicName, http.StatusNotFound)
 		return
 	}
-
-	fmt.Println("name of the treenode is " + t.Name)
-	fmt.Println(t.Topic)
 
 	topicPtr := t.Topic
 
