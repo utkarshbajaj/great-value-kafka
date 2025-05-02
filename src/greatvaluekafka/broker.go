@@ -8,6 +8,7 @@ import (
 	"net/rpc"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -350,7 +351,9 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 	dependentSubscribers := parentConsumerGroupPtr.DependentSubscribers[subscriberId.String()]
 
 	items := make([]string, 0)
+	resultCh := make(chan []string, len(dependentSubscribers))
 
+	var wg sync.WaitGroup
 	// for all the dependent subscribers, read the topic
 	for _, dependentSubscriberId := range dependentSubscribers {
 		// read the topic for this subscriber
@@ -358,8 +361,20 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 		dependentConsumerGroupPtr := parentConsumerGroupPtr.DependentConsumerGroups[dependentConsumerGroupIndex]
 		dependentTopicPtr := parentConsumerGroupPtr.DependentTopics[dependentConsumerGroupIndex]
 
-		newItems := b.readTopicForSubscriber(uuid.MustParse(dependentSubscriberId), dependentConsumerGroupPtr, dependentTopicPtr)
-		items = append(items, newItems...)
+		wg.Add(1)
+		go func(dependentSubscriberId string, dependentConsumerGroupPtr *ConsumerGroup, dependentTopicPtr *Topic) {
+			defer wg.Done()
+			resultCh <- b.readTopicForSubscriber(uuid.MustParse(dependentSubscriberId), dependentConsumerGroupPtr, dependentTopicPtr)
+		}(dependentSubscriberId, dependentConsumerGroupPtr, dependentTopicPtr)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	for item := range resultCh {
+		items = append(items, item...)
 	}
 
 	// return the items to the subscriber in a json array
