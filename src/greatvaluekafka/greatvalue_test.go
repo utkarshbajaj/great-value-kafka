@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+var autoIncrement int = 0
+
 type BrokerController struct {
 	Broker     *Broker
 	groupSize  int
@@ -28,8 +30,9 @@ func newBrokerController(t *testing.T, groupSize int, numPartitions int, maxPart
 	port := rand.Intn(20000) + 20000
 
 	// Create a random rpc path and debug path
-	rpcPath := "/rpc" + strconv.Itoa(rand.Intn(100000))
-	debugPath := "/debug" + strconv.Itoa(rand.Intn(100000))
+	rpcPath := "/rpc" + strconv.Itoa(autoIncrement)
+	debugPath := "/debug" + strconv.Itoa(autoIncrement)
+	autoIncrement++
 
 	brokerAddr := fmt.Sprintf("127.0.0.1:%v", port)
 	ctrlAddr := fmt.Sprintf("127.0.0.1:%v", port+1)
@@ -518,7 +521,199 @@ func TestFinal_ReplicationFaultTolerance(t *testing.T) {
 }
 
 func TestFinal_KeyPartitionAssignmentConsistency(t *testing.T) {
-	t.Errorf("Test 5 Not implemented")
+	/*
+		PLAN:
+			- 1 CG, 1 sub, 1 partition. Ensure all messages read with key
+			- 1 CG, 1 sub, 2 partition. Ensure all messages read with key
+			- 1 CG, 5 subs, 5 partitions. Ensure subscriber i only reads from partition key=i
+			- 2 CG (1, 2), 2 partitions. Ensure CG1 gets both keys, CG2 sub_i gets key=i
+	*/
+	topicName := "cats"
+
+	// ========== 1 CG, 1 sub, 1 partition ==========
+	brokerCtrl0 := newBrokerController(t, 1, 1, 1000)
+
+	tokens := strings.Split(brokerCtrl0.brokerAddr, ":")
+	ip := tokens[0]
+	port, _ := strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// create a consumer group
+	cgId := createConsumerGroup(t, ip, port, topicName)
+
+	// create a subscriber
+	subId := createSubscriber(t, ip, port, topicName, cgId)
+
+	// publish 10 messages to topic
+	n := 10
+	for i := 0; i < n; i++ {
+		publishMessage(t, ip, port, topicName, "key1", "meow"+strconv.Itoa(i))
+	}
+
+	// read the messages
+	messages := readMessage(t, ip, port, topicName, cgId, subId)
+
+	// verify
+	if len(messages) != n {
+		t.Fatalf("Expected %v messages, got %v", n, len(messages))
+	}
+	for i := range messages {
+		if messages[i] != "meow"+strconv.Itoa(i) {
+			t.Fatalf("Expected message %v to be %v, got %v", i, "meow"+strconv.Itoa(i), messages[i])
+		}
+	}
+	fmt.Println("Passed test 5.0")
+
+	// ========== 1 CG, 1 sub, 2 partition ==========
+	brokerCtrl1 := newBrokerController(t, 1, 2, 1000)
+
+	tokens = strings.Split(brokerCtrl1.brokerAddr, ":")
+	ip = tokens[0]
+	port, _ = strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// create a consumer group
+	cgId = createConsumerGroup(t, ip, port, topicName)
+
+	// create a subscriber
+	subId = createSubscriber(t, ip, port, topicName, cgId)
+
+	// janky ass way to ensure they each go to a different partition:
+	key1 := "key1"
+	key2 := "key2"
+	hash1 := HashToInt(key1) % 2
+	hash2 := HashToInt(key2) % 2
+	if hash1 == hash2 {
+		t.Fatalf("Expected different hashes for key1 and key2")
+	}
+
+	// publish 20 messages to topic, for each partition, 10 messages where
+	// index i should contain meow{i}
+	n = 10
+	for i := 0; i < n; i++ {
+		publishMessage(t, ip, port, topicName, key1, "meow"+strconv.Itoa(i))
+		publishMessage(t, ip, port, topicName, key2, "meow"+strconv.Itoa(i))
+	}
+
+	// read the messages
+	messages = readMessage(t, ip, port, topicName, cgId, subId)
+
+	// verify
+	if len(messages) != (2 * n) {
+		t.Fatalf("Expected %v messages, got %v", 2*n, len(messages))
+	}
+
+	// should get 20 messages in a round robin fashion from the 2 partitions
+	j := 0
+	for i := 0; i < (2 * n); i += 2 {
+		if messages[i] != "meow"+strconv.Itoa(j) && messages[i+1] != "meow"+strconv.Itoa(j) {
+			t.Fatalf("Expected message %v to be %v, got %v", i, "meow"+strconv.Itoa(j), messages[i])
+		}
+		j++
+	}
+	fmt.Println("Passed test 5.1")
+
+	// ========== 1 CG, 5 subs, 5 partitions ==========
+	brokerCtrl2 := newBrokerController(t, 5, 5, 1000)
+
+	tokens = strings.Split(brokerCtrl2.brokerAddr, ":")
+	ip = tokens[0]
+	port, _ = strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// create a consumer group
+	cgId = createConsumerGroup(t, ip, port, topicName)
+
+	// create 5 subscribers
+	subs := make([]string, 5)
+	for i := 0; i < 5; i++ {
+		subs[i] = createSubscriber(t, ip, port, topicName, cgId)
+	}
+
+	// here we will publish 25 messages, but this time we will distribute them randomly
+	keys := []string{"bruh", "kms", "help", "key4", "how"}
+	for i, key := range keys {
+		hash := HashToInt(key) % 5
+		if hash != i {
+			t.Fatalf("Expected hash for %q to be %d, got %d", key, i, hash)
+		}
+	}
+
+	// leetcode time baby
+	n = 25
+	freqCount := make(map[string]int)
+	for i := 0; n < 25; i++ {
+		randIdx := rand.Intn(len(keys))
+		publishMessage(t, ip, port, topicName, keys[randIdx], "meow"+strconv.Itoa(i))
+		freqCount[keys[randIdx]]++
+	}
+
+	messages = []string{}
+
+	// now make sure that the messages arrive from the partition that they are supposed to
+	for i, subId := range subs {
+		subset := readMessage(t, ip, port, topicName, cgId, subId)
+		if len(subset) != freqCount[keys[i]] {
+			t.Fatalf("Expected %v messages, got %v", freqCount[keys[i]], len(subset))
+		}
+		messages = append(messages, subset...)
+	}
+
+	// ========== 2 CG (1, 2), 2 partitions ==========
+	brokerCtrl3 := newBrokerController(t, 2, 2, 1000)
+
+	tokens = strings.Split(brokerCtrl3.brokerAddr, ":")
+	ip = tokens[0]
+	port, _ = strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// create 2 consumer groups
+	cgId1 := createConsumerGroup(t, ip, port, topicName)
+	cgId2 := createConsumerGroup(t, ip, port, topicName)
+
+	// CG1 gets 1 sub, CG2 gets 2 subs
+	subs1 := make([]string, 1)
+	subs2 := make([]string, 2)
+	for i := 0; i < 1; i++ {
+		subs1[i] = createSubscriber(t, ip, port, topicName, cgId1)
+	}
+	for i := 0; i < 2; i++ {
+		subs2[i] = createSubscriber(t, ip, port, topicName, cgId2)
+	}
+
+	// publish 20 messages to topic
+	n = 10
+	for i := 0; i < n; i++ {
+		publishMessage(t, ip, port, topicName, "key1", "meow"+strconv.Itoa(i))
+		publishMessage(t, ip, port, topicName, "key2", "meow"+strconv.Itoa(i))
+	}
+
+	// CG1 should get 20 messages
+	messages = readMessage(t, ip, port, topicName, cgId1, subs1[0])
+	if len(messages) != (2 * n) {
+		t.Fatalf("Expected %v messages, got %v", n, len(messages))
+	}
+
+	// CG2 should get 20 messages
+	messages = []string{}
+	for i := 0; i < 2; i++ {
+		subset := readMessage(t, ip, port, topicName, cgId2, subs2[i])
+		if len(subset) != n {
+			t.Fatalf("Expected %v messages, got %v", n, len(subset))
+		}
+		messages = append(messages, subset...)
+	}
+	if len(messages) != (2 * n) {
+		t.Fatalf("Expected %v messages, got %v", 2*n, len(messages))
+	}
 }
 
 func TestFinal_BrokerLoadBalancing(t *testing.T) {

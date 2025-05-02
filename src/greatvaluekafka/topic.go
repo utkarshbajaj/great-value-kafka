@@ -47,7 +47,6 @@ func NewTopic(tOpts *TopicOpts) *Topic {
 // 2. How do we select the partition to take out the value from? Round robin
 
 func (t *Topic) ReadBySub(sub *Subscriber) []string {
-	// log.Printf("Read request by subscriber: %v", sub.Id)
 	// Loop through the partitions and dequeue the items
 	itemsFetched := 0
 	batch := make([]string, 0)
@@ -59,7 +58,6 @@ func (t *Topic) ReadBySub(sub *Subscriber) []string {
 			if !sub.ShouldReadPartition[j] {
 				continue
 			}
-			// log.Printf("Reading partition %v", j)
 
 			// dequeue the items from the partition
 			item := t.Partitions[j].ReadBySub(sub)
@@ -71,7 +69,6 @@ func (t *Topic) ReadBySub(sub *Subscriber) []string {
 
 			batch = append(batch, string(item.Message))
 			itemsFetched++
-			// log.Printf("Found item: %v", string(item.Message))
 
 			if itemsFetched >= MAX_POLL_RECORDS {
 				break
