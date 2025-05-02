@@ -185,17 +185,61 @@ func readMessage(t *testing.T, ip string, port int, topicName string, consumerGr
 	return messages
 }
 
-// TODO: Add tests for this
 // Test that the endpoints are working well
 // Test that you can deactivate and activate the broker and the HTTP request behave the same way
 func TestFinalSetup(t *testing.T) {
-	broker := NewBroker(&BrokerOpts{
-		BrokerIndex: 0,
-		BrokerAddr:  "127.0.0.1:9092",
-		ControlAddr: "127.0.0.1:9093",
+	t.Log("Starting TestFinalSetup")
+
+	brokerCtrl := newBrokerController(t, &newBrokerControllerOpts{
+		groupSize:        1,
+		numPartitions:    1,
+		maxPartitionSize: 1000,
+		TTLMs:            99999,
 	})
-	go broker.Activate()
- fmt.Println("Passed test 0")
+
+	tokens := strings.Split(brokerCtrl.brokerAddr, ":")
+	ip := tokens[0]
+	port, _ := strconv.Atoi(tokens[1])
+
+	// Try to make a normal request
+	t.Log("Test 2: Testing request when broker is activated")
+	_, statusCode := sendHttpRequest(t, ip, port, "/topics", "POST", []byte(`{"name": "test-topic"}`))
+	if statusCode != http.StatusCreated {
+		t.Fatalf("Expected status code %v when broker is activated, got %v", http.StatusCreated, statusCode)
+	}
+
+	// Test: Deactivate broker and try to make request
+	t.Log("Test 3: Testing request after broker deactivation")
+	brokerCtrl.rpcClient.Call("BrokerRPC.Deactivate", struct{}{}, nil)
+
+	_, statusCode = sendHttpRequest(t, ip, port, "/topics", "POST", []byte(`{"name": "test-topic"}`))
+	if statusCode != http.StatusServiceUnavailable {
+		t.Fatalf("Expected status code %v when broker is deactivated, got %v", http.StatusServiceUnavailable, statusCode)
+	}
+
+	// Test: Reactivate broker and try to make request
+	t.Log("Test 4: Testing request after broker reactivation")
+	brokerCtrl.rpcClient.Call("BrokerRPC.Activate", struct{}{}, nil)
+	time.Sleep(100 * time.Millisecond)
+	_, statusCode = sendHttpRequest(t, ip, port, "/topics", "POST", []byte(`{"name": "test-topic"}`))
+	if statusCode != http.StatusOK {
+		t.Fatalf("Expected status code %v when broker is reactivated, got %v", http.StatusOK, statusCode)
+	}
+
+	// Try to make a request to a non-existent topic
+	t.Log("Test 5: Testing request to non-existent topic")
+	_, statusCode = sendHttpRequest(t, ip, port, "/topics/non-existent-topic/publish", "POST", []byte(`{"key": "test-key", "message": "test-message"}`))
+	if statusCode != http.StatusNotFound {
+		t.Fatalf("Expected status code %v when requesting non-existent topic, got %v", http.StatusNotFound, statusCode)
+	}
+
+	// Try to make a request to a good topic but non existing consumer group
+	t.Log("Test 6: Testing request to non-existent consumer group")
+	_, statusCode = sendHttpRequest(t, ip, port, "/topics/test-topic/consumer-groups/non-existent-consumer-group/publish", "POST", []byte(`{"key": "test-key", "message": "test-message"}`))
+	if statusCode != http.StatusNotFound {
+		t.Fatalf("Expected status code %v when requesting non-existent consumer group, got %v", http.StatusNotFound, statusCode)
+	}
+	t.Log("All tests passed successfully")
 }
 
 // TestFinalSinglePublishSingleSubscribe tests a single publish and single subscribe
@@ -1081,4 +1125,3 @@ func TestFinal_HierarchicalTopicTree(t *testing.T) {
 
 	fmt.Println("ok")
 }
-

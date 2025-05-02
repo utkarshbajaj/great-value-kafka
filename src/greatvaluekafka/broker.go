@@ -210,6 +210,12 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the topic name
+	if req.Name == "" {
+		http.Error(w, "Topic name cannot be empty", http.StatusBadRequest)
+		return
+	}
+
 	// lowercase the topic name
 	req.Name = strings.ToLower(req.Name)
 
