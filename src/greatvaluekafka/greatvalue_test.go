@@ -81,8 +81,6 @@ func sendHttpRequest(t *testing.T, ip string, port int, endpoint string, method 
 	// Create the URL endpoint
 	url := "http://" + ip + ":" + strconv.Itoa(port) + endpoint
 
-	fmt.Println(url)
-
 	// Create the HTTP request
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
 	if err != nil {
@@ -116,7 +114,7 @@ func createTopic(t *testing.T, ip string, port int, topicName string) {
 		t.Fatalf("Failed to create topic %v", topicName)
 	}
 
-	t.Logf("Created topic %v", topicName)
+	// t.Logf("Created topic %v", topicName)
 }
 
 func createConsumerGroup(t *testing.T, ip string, port int, topicName string) string {
@@ -125,12 +123,11 @@ func createConsumerGroup(t *testing.T, ip string, port int, topicName string) st
 
 	// Send the HTTP request
 	body, statusCode := sendHttpRequest(t, ip, port, url, "POST", []byte("{}"))
-	fmt.Println(statusCode)
 	if statusCode != http.StatusCreated {
 		t.Fatalf("Failed to create consumer group for topic %v", topicName)
 	}
 
-	t.Logf("Created consumer group for topic %v", topicName)
+	// t.Logf("Created consumer group for topic %v", topicName)
 
 	return string(body)
 }
@@ -142,10 +139,10 @@ func createSubscriber(t *testing.T, ip string, port int, topicName string, consu
 	// Send the HTTP request
 	body, statusCode := sendHttpRequest(t, ip, port, url, "POST", []byte("{}"))
 	if statusCode != http.StatusCreated {
-		t.Logf("body: %v, statusCode: %v", string(body), statusCode)
+		// t.Logf("body: %v, statusCode: %v", string(body), statusCode)
 		t.Fatalf("Failed to create subscriber for topic %v", topicName)
 	}
-	t.Logf("Created subscriber for topic %v", topicName)
+	// t.Logf("Created subscriber for topic %v", topicName)
 
 	return string(body)
 }
@@ -156,12 +153,12 @@ func publishMessage(t *testing.T, ip string, port int, topicName string, key str
 	reqBody := []byte(`{"key": "` + key + `", "message": "` + message + `"}`)
 
 	// Send the HTTP request
-	body, statusCode := sendHttpRequest(t, ip, port, url, "POST", reqBody)
+	_, statusCode := sendHttpRequest(t, ip, port, url, "POST", reqBody)
 	if statusCode != http.StatusAccepted {
-		t.Logf("body: %v, statusCode: %v", string(body), statusCode)
+		// t.Logf("body: %v, statusCode: %v", string(body), statusCode)
 		t.Fatalf("Failed to publish message for topic %v", topicName)
 	}
-	t.Logf("Published message for topic %v", topicName)
+	// t.Logf("Published message for topic %v", topicName)
 }
 
 func readMessage(t *testing.T, ip string, port int, topicName string, consumerGroupId string, subscriberId string) []string {

@@ -219,7 +219,7 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 	// lowercase the topic name
 	req.Name = strings.ToLower(req.Name)
 
-	log.Printf("Received topic creation request: %v", req)
+	// log.Printf("Received topic creation request: %v", req)
 
 	// the topic will be split by the "-" character
 	// this should have been / but becuase of this being in the url path,
@@ -237,7 +237,7 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Create the topic in the topic tree
 	b.topicTreeRoot.Create(tokens, 0)
-	log.Printf("Created topic %v", req.Name)
+	// log.Printf("Created topic %v", req.Name)
 
 	// b.Topics.Store(req.Name, topic)
 	w.WriteHeader(http.StatusCreated)
@@ -267,7 +267,7 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Received topic subscription request: %v", topicName)
+	// log.Printf("Received topic subscription request: %v", topicName)
 
 	// Check if the topic exists in the topic tree
 	topicTokens := strings.Split(topicName, "-")
@@ -387,7 +387,7 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 
 	// get all the dependent subscribers for this subscriber
 	dependentSubscribers := parentConsumerGroupPtr.DependentSubscribers[subscriberId.String()]
-	// log.Printf("Received topic consume request for subscriber %v", subscriberId)
+	// // log.Printf("Received topic consume request for subscriber %v", subscriberId)
 
 	// subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
 	// subscriberPtr := (*consumerGroupPtr.Subscribers)[subIndex]
@@ -447,7 +447,7 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Received topic publish request: %v", topicName)
+	// log.Printf("Received topic publish request: %v", topicName)
 
 	// Check if the topic exists in the topic tree
 	topicTokens := strings.Split(topicName, "-")
@@ -512,9 +512,6 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	fmt.Println("name of the treenode is " + t.Name)
-	fmt.Println(t.Topic)
-
 	topicPtr := t.Topic
 
 	cgId := tokens[4]
@@ -569,8 +566,6 @@ func (b *Broker) addSubscriberToConsumerGroup(consumerGroupPtr *ConsumerGroup) s
 		subscriber.ShouldReadPartition = make([]bool, b.numPartitions)
 	}
 
-	// TODO: remove log; print the numSubs, partitionsPerSub, and subscribers
-	log.Printf("Subscribers: %v, partitionsPerSub: %v, numSubscribers: %v", numSubs, partitionsPerSub, numSubs)
 
 	// remap the subscriber to the new partitions
 	currSub := 0
@@ -579,11 +574,6 @@ func (b *Broker) addSubscriberToConsumerGroup(consumerGroupPtr *ConsumerGroup) s
 		if (i+1)%partitionsPerSub == 0 {
 			currSub = (currSub + 1) % numSubs
 		}
-	}
-
-	// TODO: remove log; for each subscriber, should print which paritions they should read
-	for i, subscriber := range *consumerGroupPtr.Subscribers {
-		log.Printf("%v Subscriber %v should read partitions: %v", i, subscriber.Id, subscriber.ShouldReadPartition)
 	}
 
 	return subscriber.Id.String()

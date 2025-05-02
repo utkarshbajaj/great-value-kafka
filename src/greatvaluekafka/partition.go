@@ -3,8 +3,6 @@ package greatvaluekafka
 import (
 	"sync"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // This is our queue message
@@ -81,7 +79,7 @@ func NewPartition(opts *partitionOpts) *Partition {
 	}
 
 	// Start with empty subscribers list, it will be updated when subscribers are added
-	log.Printf("Starting dequeue cron for partition %v with interval %v", p.Id, time.Duration(p.sweepInterval)*time.Second)
+	// log.Printf("Starting dequeue cron for partition %v with interval %v", p.Id, time.Duration(p.sweepInterval)*time.Second)
 	p.StartDequeueCron(p.sweepInterval)
 
 	return p
