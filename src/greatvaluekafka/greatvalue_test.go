@@ -253,13 +253,12 @@ func startConsumerGroup(t *testing.T, ip string, port int, topicName string, cgI
 
 func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 	/*
-		skjdfsldf
-			PLAN:
-			- first test 1 CG, 1 sub, 1 partition
-			- then test 1 CG, 1 sub, 2 partition
-			- then test 1 CG, 5 subs, 5 partitions, parallel
-			- then test 2 CG (2, 4), 5 partitions, both concurrent
-			- then test 3 CG (1,1,1) 5 partitions, both concurrent
+		PLAN:
+		- first test 1 CG, 1 sub, 1 partition
+		- then test 1 CG, 1 sub, 2 partition
+		- then test 1 CG, 5 subs, 5 partitions, parallel
+		- then test 2 CG (2, 4), 5 partitions, both concurrent
+		- then test 3 CG (1,1,1) 5 partitions, both concurrent
 	*/
 	topicName := "cats"
 
@@ -387,17 +386,20 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 		startConsumer(t, ip, port, topicName, cgId, subId, messagesChan)
 	}
 
-	// Wait for some time to collect messages
-	time.Sleep(15 * time.Second)
-
+	// Wait until we receive all 200 messages or timeout after 15 seconds on slow machines
 	receivedMessages := make(map[string]bool)
-	done := false
-	for !done {
+	timeout := time.After(20 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for len(receivedMessages) < 200 {
 		select {
 		case msg := <-messagesChan:
 			receivedMessages[msg] = true
-		default:
-			done = true
+		case <-ticker.C:
+			continue
+		case <-timeout:
+			t.Fatalf("Timeout waiting for all messages. Received %d out of 200 messages", len(receivedMessages))
 		}
 	}
 
@@ -462,25 +464,27 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 		publishMessage(t, ip, port, topicName, "", "meow"+strconv.Itoa(i))
 	}
 
-	time.Sleep(5 * time.Second)
+	// Wait until both consumer groups receive all messages or timeout after 15 seconds on slow machines
+	timeout = time.After(15 * time.Second)
+	ticker = time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-	// collectmessages
-	collectMessages := func(messagesChan <-chan string) map[string]bool {
-		messages := make(map[string]bool)
-		done := false
-		for !done {
-			select {
-			case msg := <-messagesChan:
-				messages[msg] = true
-			default:
-				done = true
-			}
+	cg1Messages := make(map[string]bool)
+	cg2Messages := make(map[string]bool)
+
+	for len(cg1Messages) < n || len(cg2Messages) < n {
+		select {
+		case msg := <-cg1Chan:
+			cg1Messages[msg] = true
+		case msg := <-cg2Chan:
+			cg2Messages[msg] = true
+		case <-ticker.C:
+			continue
+		case <-timeout:
+			t.Fatalf("Timeout waiting for all messages. CG1 received %d, CG2 received %d out of %d messages",
+				len(cg1Messages), len(cg2Messages), n)
 		}
-		return messages
 	}
-
-	cg1Messages := collectMessages(cg1Chan)
-	cg2Messages := collectMessages(cg2Chan)
 
 	// Verify both consumer groups received all messages
 	expectedMessages = make(map[string]bool)
@@ -503,4 +507,24 @@ func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
 	}
 
 	fmt.Println("Passed test 2.3")
+}
+
+func TestFinal_EvictionPolicy(t *testing.T) {
+	t.Errorf("Test 3 Not implemented")
+}
+
+func TestFinal_ReplicationFaultTolerance(t *testing.T) {
+	t.Errorf("Test 4 Not implemented")
+}
+
+func TestFinal_KeyPartitionAssignmentConsistency(t *testing.T) {
+	t.Errorf("Test 5 Not implemented")
+}
+
+func TestFinal_BrokerLoadBalancing(t *testing.T) {
+	t.Errorf("Test 6 Not implemented")
+}
+
+func TestFinal_OverlappingTopicsAndHierachicalReads(t *testing.T) {
+	t.Errorf("Test 7 Not implemented")
 }
