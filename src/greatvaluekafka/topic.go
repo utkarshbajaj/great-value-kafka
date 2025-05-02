@@ -20,6 +20,7 @@ type TopicOpts struct {
 	Name             string
 	Partitions       int
 	MaxPartitionSize int
+	TTLMs            int
 }
 
 // NewTopic creates a new topic with the given name and partitions
@@ -33,9 +34,13 @@ func NewTopic(tOpts *TopicOpts) *Topic {
 
 	// create the partitions
 	for i := range tOpts.Partitions {
+		subscribers := []*Subscriber{}
 		pOpts := &partitionOpts{
-			maxSize:     tOpts.MaxPartitionSize,
-			PartitionId: i,
+			maxSize:       tOpts.MaxPartitionSize,
+			PartitionId:   i,
+			ttlMs:         tOpts.TTLMs,
+			subscribers:   &subscribers,
+			sweepInterval: 5000,
 		}
 		topic.Partitions[i] = NewPartition(pOpts)
 	}
@@ -43,8 +48,13 @@ func NewTopic(tOpts *TopicOpts) *Topic {
 	return topic
 }
 
-// 1. How many return values per patrition? 10 for now
-// 2. How do we select the partition to take out the value from? Round robin
+func (t *Topic) AddConsumerGroup(cgId string, consumerGroup *ConsumerGroup) {
+	t.ConsumerGroups.Store(cgId, consumerGroup)
+	for _, partition := range t.Partitions {
+		// each partition should have a pointer to the consumer group subscribers
+		partition.subscribers = consumerGroup.Subscribers
+	}
+}
 
 func (t *Topic) ReadBySub(sub *Subscriber) []string {
 	// Loop through the partitions and dequeue the items

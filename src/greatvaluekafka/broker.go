@@ -54,6 +54,9 @@ type Broker struct {
 	numPartitions    int
 	maxPartitionSize int
 
+	// TODO: have this be able to be set by clients via API
+	ttlMs int
+
 	// the http listener for the rpc server
 	rpcListener net.Listener
 
@@ -70,6 +73,9 @@ type BrokerOpts struct {
 
 	// max size in bytes for a partition
 	MaxPartitionSize int
+
+	// time to live for messages in milliseconds
+	TTLMs int
 
 	// the address that pub/sub clients connect to
 	BrokerAddr string
@@ -92,6 +98,7 @@ func NewBroker(bOpts *BrokerOpts) *Broker {
 		controllerStub:   rpc.NewServer(),
 		numPartitions:    bOpts.NumPartitions,
 		maxPartitionSize: bOpts.MaxPartitionSize,
+		ttlMs:            bOpts.TTLMs,
 	}
 
 	// Make sure this does not cause a deadlock
@@ -262,7 +269,7 @@ func (b *Broker) handleTopicSubscribe(w http.ResponseWriter, r *http.Request) {
 	consumerGroupPtr := NewConsumerGroup(consumerGroupId.String())
 
 	// add the consumer group to the topic
-	topicPtr.ConsumerGroups.Store(consumerGroupId.String(), consumerGroupPtr)
+	topicPtr.AddConsumerGroup(consumerGroupId.String(), consumerGroupPtr)
 
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(consumerGroupId.String()))
@@ -324,7 +331,7 @@ func (b *Broker) handleTopicConsume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subIndex := consumerGroupPtr.SubscriberIndex[subscriberId]
-	subscriberPtr := consumerGroupPtr.Subscribers[subIndex]
+	subscriberPtr := (*consumerGroupPtr.Subscribers)[subIndex]
 
 	// read the topic for the subscriber
 	items := topicPtr.ReadBySub(subscriberPtr)
@@ -371,7 +378,6 @@ func (b *Broker) handleTopicPublish(w http.ResponseWriter, r *http.Request) {
 	// TODO: Check if there is a problem with usign a goroutine here
 	// Mainly doing this to avoid blocking the http request
 	go topicPtr.PushToPartition([]byte(req.Message), req.Key)
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -416,22 +422,22 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 	consumerGroupPtr := consumerGroup.(*ConsumerGroup)
 
 	// dont allow more subs than partitions
-	if len(consumerGroupPtr.Subscribers) >= b.numPartitions {
+	if len(*consumerGroupPtr.Subscribers) >= b.numPartitions {
 		http.Error(w, "Max subscribers reached "+strconv.Itoa(b.numPartitions), http.StatusBadRequest)
 		return
 	}
 
 	subscriber := NewSubscriber(b.numPartitions)
-	consumerGroupPtr.Subscribers = append(consumerGroupPtr.Subscribers, subscriber)
-	consumerGroupPtr.SubscriberIndex[subscriber.Id] = len(consumerGroupPtr.Subscribers) - 1
+	*consumerGroupPtr.Subscribers = append(*consumerGroupPtr.Subscribers, subscriber)
+	consumerGroupPtr.SubscriberIndex[subscriber.Id] = len(*consumerGroupPtr.Subscribers) - 1
 
 	// we will need to ensure that each subscriber is now remapped to new partitions
 	// we decide with partitions_per_sub = partitions/subscribers
-	numSubs := len(consumerGroupPtr.Subscribers)
+	numSubs := len(*consumerGroupPtr.Subscribers)
 	partitionsPerSub := b.numPartitions / numSubs
 
 	// reset mappings for each subscriber
-	for _, subscriber := range consumerGroupPtr.Subscribers {
+	for _, subscriber := range *consumerGroupPtr.Subscribers {
 		subscriber.ShouldReadPartition = make([]bool, b.numPartitions)
 	}
 
@@ -441,14 +447,14 @@ func (b *Broker) handleConsumerGroupSubscribe(w http.ResponseWriter, r *http.Req
 	// remap the subscriber to the new partitions
 	currSub := 0
 	for i := range b.numPartitions {
-		consumerGroupPtr.Subscribers[currSub].ShouldReadPartition[i] = true
+		(*consumerGroupPtr.Subscribers)[currSub].ShouldReadPartition[i] = true
 		if (i+1)%partitionsPerSub == 0 {
 			currSub = (currSub + 1) % numSubs
 		}
 	}
 
 	// TODO: remove log; for each subscriber, should print which paritions they should read
-	for i, subscriber := range consumerGroupPtr.Subscribers {
+	for i, subscriber := range *consumerGroupPtr.Subscribers {
 		log.Printf("%v Subscriber %v should read partitions: %v", i, subscriber.Id, subscriber.ShouldReadPartition)
 	}
 
