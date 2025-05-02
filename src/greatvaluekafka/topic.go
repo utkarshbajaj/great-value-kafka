@@ -16,19 +16,25 @@ type Topic struct {
 	ConsumerGroups sync.Map // map[string]*ConsumerGroup
 }
 
+type TopicOpts struct {
+	Name             string
+	Partitions       int
+	MaxPartitionSize int
+}
+
 // NewTopic creates a new topic with the given name and partitions
-func NewTopic(name string, partitions int) *Topic {
+func NewTopic(tOpts *TopicOpts) *Topic {
 	// create the topic
 	topic := &Topic{
-		Name:        name,
-		Partitions:  make([]*Partition, partitions),
+		Name:           tOpts.Name,
+		Partitions:     make([]*Partition, tOpts.Partitions),
 		ConsumerGroups: sync.Map{},
 	}
 
 	// create the partitions
-	for i := range partitions {
+	for i := range tOpts.Partitions {
 		pOpts := &partitionOpts{
-			maxSize:     MAX_PARTITION_SIZE,
+			maxSize:     tOpts.MaxPartitionSize,
 			PartitionId: i,
 		}
 		topic.Partitions[i] = NewPartition(pOpts)
@@ -36,7 +42,6 @@ func NewTopic(name string, partitions int) *Topic {
 
 	return topic
 }
-
 
 // 1. How many return values per patrition? 10 for now
 // 2. How do we select the partition to take out the value from? Round robin

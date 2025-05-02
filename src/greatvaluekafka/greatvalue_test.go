@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type BrokerController struct {
@@ -22,26 +23,26 @@ type BrokerController struct {
 	rpcClient *rpc.Client
 }
 
-func newBrokerController(t *testing.T, groupSize int, numPartitions int) *BrokerController {
-
+func newBrokerController(t *testing.T, groupSize int, numPartitions int, maxPartitionSize int) *BrokerController {
 	// Create a random port for the broker
 	port := rand.Intn(20000) + 20000
 
 	// Create a random rpc path and debug path
-	rpcPath := "/rpc" + strconv.Itoa(rand.Intn(10000))
-	debugPath := "/debug" + strconv.Itoa(rand.Intn(10000))
+	rpcPath := "/rpc" + strconv.Itoa(rand.Intn(100000))
+	debugPath := "/debug" + strconv.Itoa(rand.Intn(100000))
 
 	brokerAddr := fmt.Sprintf("127.0.0.1:%v", port)
 	ctrlAddr := fmt.Sprintf("127.0.0.1:%v", port+1)
 
 	brokerCtrl := &BrokerController{
 		Broker: NewBroker(&BrokerOpts{
-			BrokerIndex:   0,
-			BrokerAddr:    brokerAddr,
-			ControlAddr:   ctrlAddr,
-			NumPartitions: numPartitions,
-			RPCPath:       rpcPath,
-			DebugPath:     debugPath,
+			BrokerIndex:      0,
+			BrokerAddr:       brokerAddr,
+			ControlAddr:      ctrlAddr,
+			NumPartitions:    numPartitions,
+			MaxPartitionSize: maxPartitionSize,
+			RPCPath:          rpcPath,
+			DebugPath:        debugPath,
 		}),
 		groupSize:  groupSize,
 		brokerAddr: brokerAddr,
@@ -124,8 +125,8 @@ func createSubscriber(t *testing.T, ip string, port int, topicName string, consu
 	// Send the HTTP request
 	body, statusCode := sendHttpRequest(t, ip, port, url, "POST", []byte("{}"))
 	if statusCode != http.StatusCreated {
+		t.Logf("body: %v, statusCode: %v", string(body), statusCode)
 		t.Fatalf("Failed to create subscriber for topic %v", topicName)
-
 	}
 	t.Logf("Created subscriber for topic %v", topicName)
 
@@ -138,8 +139,9 @@ func publishMessage(t *testing.T, ip string, port int, topicName string, key str
 	reqBody := []byte(`{"key": "` + key + `", "message": "` + message + `"}`)
 
 	// Send the HTTP request
-	_, statusCode := sendHttpRequest(t, ip, port, url, "POST", reqBody)
+	body, statusCode := sendHttpRequest(t, ip, port, url, "POST", reqBody)
 	if statusCode != http.StatusAccepted {
+		t.Logf("body: %v, statusCode: %v", string(body), statusCode)
 		t.Fatalf("Failed to publish message for topic %v", topicName)
 	}
 	t.Logf("Published message for topic %v", topicName)
@@ -169,21 +171,22 @@ func readMessage(t *testing.T, ip string, port int, topicName string, consumerGr
 // TODO: Add tests for this
 // Test that the endpoints are working well
 // Test that you can deactivate and activate the broker and the HTTP request behave the same way
-// func Test_Setup(t *testing.T) {
+// func TestFinalSetup(t *testing.T) {
 // 	broker := NewBroker(&BrokerOpts{
 // 		BrokerIndex: 0,
 // 		BrokerAddr:  "127.0.0.1:9092",
 // 		ControlAddr: "127.0.0.1:9093",
 // 	})
 // 	go broker.Activate()
+//  fmt.Println("Passed test 0")
 // }
 
-// Test_SinglePublishSingleSubscribe tests a single publish and single subscribe
+// TestFinalSinglePublishSingleSubscribe tests a single publish and single subscribe
 // with one partition. This should work for multiple messages.
-func Test_SinglePublishSingleSubscribe(t *testing.T) {
+func TestFinalSinglePublishSingleSubscribe(t *testing.T) {
 	// This creates a broker controller
 	// It activates the broker to receive requests from clients
-	brokerCtrl := newBrokerController(t, 1, 1)
+	brokerCtrl := newBrokerController(t, 1, 1, 1000)
 
 	// get the ip and the port of the broker addr
 	tokens := strings.Split(brokerCtrl.brokerAddr, ":")
@@ -218,20 +221,101 @@ func Test_SinglePublishSingleSubscribe(t *testing.T) {
 	fmt.Println("Passed test 1")
 }
 
-func Test_MultiplePublishersMultipleSubscribers(t *testing.T) {
-	brokerCtrl := newBrokerController(t, 1, 2)
+// startPublisher creates a goroutine that publishes messages with the given parameters
+func startPublisher(t *testing.T, ip string, port int, topicName string, publisherName string, numMessages int) {
+	go func() {
+		for i := 0; i < numMessages; i++ {
+			publishMessage(t, ip, port, topicName, "", publisherName+"-meow"+strconv.Itoa(i))
+			time.Sleep(69 * time.Millisecond)
+		}
+	}()
+}
 
-	tokens := strings.Split(brokerCtrl.brokerAddr, ":")
+// startConsumer creates a goroutine that consumes messages and adds them to the provided channel
+func startConsumer(t *testing.T, ip string, port int, topicName string, consumerGroupId string, subscriberId string, messagesChan chan<- string) {
+	go func() {
+		for {
+			messages := readMessage(t, ip, port, topicName, consumerGroupId, subscriberId)
+			for _, msg := range messages {
+				messagesChan <- msg
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+}
+
+// startConsumerGroup creates goroutines for all subscribers in a consumer group and collects their messages
+func startConsumerGroup(t *testing.T, ip string, port int, topicName string, cgId string, subs []string, messagesChan chan<- string) {
+	for _, subId := range subs {
+		startConsumer(t, ip, port, topicName, cgId, subId, messagesChan)
+	}
+}
+
+func TestFinalMultiplePublishersMultipleSubscribers(t *testing.T) {
+	/*
+		skjdfsldf
+			PLAN:
+			- first test 1 CG, 1 sub, 1 partition
+			- then test 1 CG, 1 sub, 2 partition
+			- then test 1 CG, 5 subs, 5 partitions, parallel
+			- then test 2 CG (2, 4), 5 partitions, both concurrent
+			- then test 3 CG (1,1,1) 5 partitions, both concurrent
+	*/
+	topicName := "cats"
+
+	// 1 CG, 1 sub, 1 partition
+	brokerCtrl0 := newBrokerController(t, 1, 1, 1000)
+
+	tokens := strings.Split(brokerCtrl0.brokerAddr, ":")
 	ip := tokens[0]
 	port, _ := strconv.Atoi(tokens[1])
-
-	topicName := "cats"
 
 	// create a topic
 	createTopic(t, ip, port, topicName)
 
 	// create a consumer group
 	cgId := createConsumerGroup(t, ip, port, topicName)
+
+	// create a subscriber
+	subId := createSubscriber(t, ip, port, topicName, cgId)
+
+	// publish 10 messages
+	n := 10
+	originalMessages0 := make([]string, n)
+	for i := 0; i < n; i++ {
+		originalMessages0[i] = "meow" + strconv.Itoa(i)
+		publishMessage(t, ip, port, topicName, "", originalMessages0[i])
+	}
+
+	// read the messages
+	messages0 := readMessage(t, ip, port, topicName, cgId, subId)
+
+	if len(messages0) != n {
+		t.Fatalf("Expected %v messages, got %v", n, len(messages0))
+	}
+
+	// check if the message slices are the same
+	// this time order does matter, its just one partition
+	for i := range originalMessages0 {
+		if originalMessages0[i] != messages0[i] {
+			t.Fatalf("Expected message %v to be %v, got %v", i, originalMessages0[i], messages0[i])
+		}
+	}
+
+	fmt.Println("Passed test 2.0")
+
+	// ========== 1 CG, 1 sub, 2 partition ==========
+	brokerCtrl1 := newBrokerController(t, 1, 2, 1000)
+
+	tokens = strings.Split(brokerCtrl1.brokerAddr, ":")
+	ip = tokens[0]
+	port, _ = strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// create a consumer group
+	cgId = createConsumerGroup(t, ip, port, topicName)
 
 	numSubscribers := 2
 
@@ -241,36 +325,182 @@ func Test_MultiplePublishersMultipleSubscribers(t *testing.T) {
 		subs[i] = createSubscriber(t, ip, port, topicName, cgId)
 	}
 
-	var originalMessages []string
+	var originalMessages1 []string
 
 	// Publish 10 messages using a loop
 	for i := 0; i < 10; i++ {
 		message := "meow" + strconv.Itoa(i)
-		originalMessages = append(originalMessages, message)
+		originalMessages1 = append(originalMessages1, message)
 		publishMessage(t, ip, port, topicName, "", message)
 	}
 
-	var messages []string
+	var messages1 []string
 
 	// read the messages
 	for i := 0; i < numSubscribers; i++ {
-		messages = append(messages, readMessage(t, ip, port, topicName, cgId, subs[i])...)
+		messages1 = append(messages1, readMessage(t, ip, port, topicName, cgId, subs[i])...)
 	}
 
-	if len(messages) != 10 {
-		t.Fatalf("Expected 10 messages, got %v", len(messages))
+	if len(messages1) != 10 {
+		t.Fatalf("Expected 10 messages, got %v", len(messages1))
 	}
 
 	// check if the message slices are the same
 	// ordering does not matter, so we can sort them
-	sort.Strings(originalMessages)
-	sort.Strings(messages)
+	sort.Strings(originalMessages1)
+	sort.Strings(messages1)
 
-	for i := range originalMessages {
-		if originalMessages[i] != messages[i] {
-			t.Fatalf("Expected message %v to be %v, got %v", i, originalMessages[i], messages[i])
+	for i := range originalMessages1 {
+		if originalMessages1[i] != messages1[i] {
+			t.Fatalf("Expected message %v to be %v, got %v", i, originalMessages1[i], messages1[i])
 		}
 	}
 
-	fmt.Println("Passed test 2")
+	fmt.Println("Passed test 2.1")
+
+	// ========== 1 CG, 5 subs, 5 partitions ===========
+	brokerCtrl2 := newBrokerController(t, 5, 5, 3000)
+
+	tokens = strings.Split(brokerCtrl2.brokerAddr, ":")
+	ip = tokens[0]
+	port, _ = strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// create a consumer group
+	cgId = createConsumerGroup(t, ip, port, topicName)
+
+	// create 5 subscribers
+	subs = make([]string, 5)
+	for i := 0; i < 5; i++ {
+		subs[i] = createSubscriber(t, ip, port, topicName, cgId)
+	}
+
+	messagesChan := make(chan string, 200)
+
+	// Start two concurrent publishers along with 5 consumers
+	startPublisher(t, ip, port, topicName, "p1", 100)
+	startPublisher(t, ip, port, topicName, "p2", 100)
+	for i := 0; i < 5; i++ {
+		subId := subs[i]
+		startConsumer(t, ip, port, topicName, cgId, subId, messagesChan)
+	}
+
+	// Wait for some time to collect messages
+	time.Sleep(15 * time.Second)
+
+	receivedMessages := make(map[string]bool)
+	done := false
+	for !done {
+		select {
+		case msg := <-messagesChan:
+			receivedMessages[msg] = true
+		default:
+			done = true
+		}
+	}
+
+	// Verify we received all expected messages
+	expectedMessages := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		expectedMessages["p1-meow"+strconv.Itoa(i)] = true
+		expectedMessages["p2-meow"+strconv.Itoa(i)] = true
+	}
+	for msg := range expectedMessages {
+		if !receivedMessages[msg] {
+			t.Fatalf("Missing message: %s", msg)
+		}
+	}
+	for msg := range receivedMessages {
+		if !expectedMessages[msg] {
+			t.Fatalf("Unexpected message: %s", msg)
+		}
+	}
+	if len(receivedMessages) != len(expectedMessages) {
+		t.Fatalf("Expected %d messages, received %d", len(expectedMessages), len(receivedMessages))
+	}
+
+	fmt.Println("Passed test 2.2")
+
+	// ========== 2 CG (2, 4), 5 partitions ===========
+	brokerCtrl3 := newBrokerController(t, 5, 5, 1000)
+
+	tokens = strings.Split(brokerCtrl3.brokerAddr, ":")
+	ip = tokens[0]
+	port, _ = strconv.Atoi(tokens[1])
+
+	// create a topic
+	createTopic(t, ip, port, topicName)
+
+	// create 2 consumer groups
+	cgId1 := createConsumerGroup(t, ip, port, topicName)
+	cgId2 := createConsumerGroup(t, ip, port, topicName)
+
+	// now we need to add 2 subscribers to CG1, and 4 to CG2
+	p, q := 2, 4
+	subs1 := make([]string, p)
+	subs2 := make([]string, q)
+	for i := 0; i < p; i++ {
+		subs1[i] = createSubscriber(t, ip, port, topicName, cgId1)
+	}
+	for i := 0; i < q; i++ {
+		subs2[i] = createSubscriber(t, ip, port, topicName, cgId2)
+	}
+
+	// Create channels for each consumer group
+	cg1Chan := make(chan string, 100)
+	cg2Chan := make(chan string, 100)
+
+	// Start both consumer groups
+	startConsumerGroup(t, ip, port, topicName, cgId1, subs1, cg1Chan)
+	startConsumerGroup(t, ip, port, topicName, cgId2, subs2, cg2Chan)
+
+	// publish 100 messages
+	n = 100
+	for i := 0; i < n; i++ {
+		publishMessage(t, ip, port, topicName, "", "meow"+strconv.Itoa(i))
+	}
+
+	time.Sleep(5 * time.Second)
+
+	// collectmessages
+	collectMessages := func(messagesChan <-chan string) map[string]bool {
+		messages := make(map[string]bool)
+		done := false
+		for !done {
+			select {
+			case msg := <-messagesChan:
+				messages[msg] = true
+			default:
+				done = true
+			}
+		}
+		return messages
+	}
+
+	cg1Messages := collectMessages(cg1Chan)
+	cg2Messages := collectMessages(cg2Chan)
+
+	// Verify both consumer groups received all messages
+	expectedMessages = make(map[string]bool)
+	for i := 0; i < n; i++ {
+		expectedMessages["meow"+strconv.Itoa(i)] = true
+	}
+	for msg := range expectedMessages {
+		if !cg1Messages[msg] {
+			t.Fatalf("CG1 missing message: %s", msg)
+		}
+		if !cg2Messages[msg] {
+			t.Fatalf("CG2 missing message: %s", msg)
+		}
+	}
+	if len(cg1Messages) != len(expectedMessages) {
+		t.Fatalf("CG1 expected %d messages, received %d", len(expectedMessages), len(cg1Messages))
+	}
+	if len(cg2Messages) != len(expectedMessages) {
+		t.Fatalf("CG2 expected %d messages, received %d", len(expectedMessages), len(cg2Messages))
+	}
+
+	fmt.Println("Passed test 2.3")
 }

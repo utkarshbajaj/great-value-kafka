@@ -18,15 +18,6 @@ func createPartition(maxSize int) *Partition {
 	})
 }
 
-// createSubscribers creates a slice of subscriber
-func createSubscribers(subCount int) []*Subscriber {
-	subs := make([]*Subscriber, subCount)
-	for i := 0; i < subCount; i++ {
-		subs[i] = NewSubscriber(1)
-	}
-	return subs
-}
-
 func Test_Partition_EnqueueMessage(t *testing.T) {
 	// create a new partition
 	p := createPartition(defaultMaxSize)

@@ -51,7 +51,8 @@ type Broker struct {
 	controllerStub *rpc.Server
 
 	// number of partitions per Topics
-	numPartitions int
+	numPartitions    int
+	maxPartitionSize int
 
 	// the http listener for the rpc server
 	rpcListener net.Listener
@@ -66,6 +67,9 @@ type BrokerOpts struct {
 
 	// number of partitions per Topics
 	NumPartitions int
+
+	// max size in bytes for a partition
+	MaxPartitionSize int
 
 	// the address that pub/sub clients connect to
 	BrokerAddr string
@@ -83,10 +87,11 @@ type BrokerOpts struct {
 // NewBroker creates a new broker
 func NewBroker(bOpts *BrokerOpts) *Broker {
 	b := &Broker{
-		brokerIndex:    bOpts.BrokerIndex,
-		Topics:         sync.Map{},
-		controllerStub: rpc.NewServer(),
-		numPartitions:  bOpts.NumPartitions,
+		brokerIndex:      bOpts.BrokerIndex,
+		Topics:           sync.Map{},
+		controllerStub:   rpc.NewServer(),
+		numPartitions:    bOpts.NumPartitions,
+		maxPartitionSize: bOpts.MaxPartitionSize,
 	}
 
 	// Make sure this does not cause a deadlock
@@ -205,7 +210,12 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// create the topic
-	topic := NewTopic(req.Name, b.numPartitions)
+	topicOpts := &TopicOpts{
+		Name:             req.Name,
+		Partitions:       b.numPartitions,
+		MaxPartitionSize: b.maxPartitionSize,
+	}
+	topic := NewTopic(topicOpts)
 	b.Topics.Store(req.Name, topic)
 	log.Printf("Created topic %v", topic.Name)
 	w.WriteHeader(http.StatusCreated)
