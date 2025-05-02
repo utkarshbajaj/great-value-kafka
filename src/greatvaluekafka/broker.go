@@ -229,16 +229,6 @@ func (b *Broker) handleTopicCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// create the topic
-	// topicOpts := &TopicOpts{
-	// 	Name:             req.Name,
-	// 	Partitions:       b.numPartitions,
-	// 	MaxPartitionSize: b.maxPartitionSize,
-	// 	TTLMs:            b.ttlMs,
-	// 	SweepInterval:    b.sweepInterval,
-	// }
-	// topic := NewTopic(topicOpts)
-
 	// Create the topic in the topic tree
 	b.topicTreeRoot.Create(tokens, 0)
 	log.Printf("Created topic %v", req.Name)
