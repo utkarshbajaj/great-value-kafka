@@ -24,7 +24,7 @@ Overall Design:
 #### Limitations:
 
 - There is support for topic trees, but it is static; the topic leaf nodes should all be setup before subscribing. If you update the leaf nodes afterwards, you will still get the new items across all hierachies but if you add a new child later you won't get that
-- Not the best quality code right now, but it works. Working on improving it.
+- TODO: Add Raft for fault tolerance 
 
 ## Docs and Tests
 
